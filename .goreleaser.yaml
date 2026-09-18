@@ -1,0 +1,66 @@
+version: 2
+
+project_name: nebula
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: nebula
+    main: ./cmd/nebula
+    binary: nebula
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/sagar0163/nebula/internal/cli.version={{.Version}}
+      - -X github.com/sagar0163/nebula/internal/cli.commit={{.Commit}}
+      - -X github.com/sagar0163/nebula/internal/cli.date={{.Date}}
+
+archives:
+  - id: nebula
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - configs/config.toml
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: sagar0163
+    name: nebula
+  draft: false
+  prerelease: auto
+
+brews:
+  - name: nebula
+    repository:
+      owner: sagar0163
+      name: homebrew-tap
+    homepage: "https://github.com/sagar0163/nebula"
+    description: "Self-healing terminal agent with AI-powered command recovery"
+    license: "MIT"
+    install: |
+      bin.install "nebula"

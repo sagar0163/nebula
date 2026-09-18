@@ -1,0 +1,26 @@
+# Binaries
+nebula
+dist/
+
+# Build artifacts
+*.exe
+*.test
+coverage.out
+
+# Config with secrets (use configs/config.toml as template, never commit filled keys)
+~/.config/nebula/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

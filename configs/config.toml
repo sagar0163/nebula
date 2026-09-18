@@ -1,0 +1,69 @@
+# Nebula configuration file
+# Default location: ~/.config/nebula/config.toml
+# Override with: --config <path> or NEBULA_CONFIG env var
+
+[agent]
+dry_run = false
+skip_permissions = false
+max_heal_retries = 3
+session_dir = "~/.local/share/nebula/sessions"
+
+[llm]
+# Primary provider: "gemini" | "groq" | "ollama" | "openai"
+primary = "groq"
+# Fallback provider when primary is unavailable
+fallback = "ollama"
+
+[llm.groq]
+# Set via NEBULA_LLM_GROQ_API_KEY or keyring
+api_key = ""
+# Workload-specialized models
+model_diagnose = "llama-3.1-8b-instant"   # fast, cheap — failure analysis
+model_heal     = "llama-3.3-70b-versatile" # mid-tier — fix suggestions
+model_learn    = "llama-3.3-70b-versatile" # strong — workflow learning
+model_embed    = ""                          # Groq has no embed endpoint; falls back to Ollama
+
+[llm.gemini]
+api_key = ""
+model_diagnose = "gemini-2.0-flash"
+model_heal     = "gemini-2.5-pro"
+model_learn    = "gemini-2.5-pro"
+model_embed    = "text-embedding-004"
+
+[llm.ollama]
+base_url = "http://localhost:11434"
+model_diagnose = "llama3.2:3b"
+model_heal     = "llama3.2"
+model_learn    = "llama3.1:70b"
+model_embed    = "nomic-embed-text"
+
+[memory]
+db_path = "~/.local/share/nebula/nebula.db"
+# Max ring buffer size in bytes kept in memory for AI context
+ring_buffer_size = 32768  # 32KB
+
+[safety]
+# Default policy per risk level: "allow" | "ask" | "deny"
+policy_safe      = "allow"
+policy_low       = "allow"
+policy_medium    = "ask"
+policy_high      = "ask"
+policy_dangerous = "deny"
+# Audit log path — append-only record of every AI suggestion + user decision
+audit_log = "~/.local/share/nebula/audit.log"
+
+[tui]
+theme = "auto"  # "auto" | "light" | "dark"
+
+# MCP server connections
+# [[mcp.servers]]
+# name = "filesystem"
+# type = "stdio"
+# command = "npx -y @modelcontextprotocol/server-filesystem ~"
+#
+# [[mcp.servers]]
+# name = "github"
+# type = "stdio"
+# command = "npx -y @modelcontextprotocol/server-github"
+# [mcp.servers.env]
+# GITHUB_PERSONAL_ACCESS_TOKEN = ""

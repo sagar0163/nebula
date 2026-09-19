@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 
 	"github.com/sagar0163/nebula/internal/llm"
@@ -81,6 +83,20 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 
 	// 5. On failure, attempt healing.
 	if cmdResult.ExitCode != 0 {
+		// Try recalling a similar past fix before calling the LLM.
+		if recalled, err := a.recallPattern(ctx, raw, string(cmdResult.Stdout)); err == nil && recalled != nil {
+			// Use the recalled fix — still ask for approval.
+			if opts.ApprovalFn(recalled.FixCmd, safety.RiskMedium) {
+				result.Healed = true
+				result.HealApply = recalled
+				fixResult, err := a.harness.Run(ctx, "sh", []string{"-c", recalled.FixCmd})
+				if err == nil && fixResult.ExitCode == 0 {
+					_ = a.learnPattern(ctx, raw, string(cmdResult.Stdout), recalled.FixCmd)
+				}
+				return result, nil
+			}
+		}
+
 		suggestion, err := a.diagnose(ctx, raw, string(cmdResult.Stdout))
 		if err != nil {
 			return result, nil // best-effort: return without healing
@@ -128,11 +144,69 @@ func (a *Agent) diagnose(ctx context.Context, cmd, output string) (*models.HealS
 }
 
 func (a *Agent) learnPattern(ctx context.Context, failCmd, failOutput, fixCmd string) error {
-	// TODO: embed the failure context and save as a Pattern for future retrieval.
-	_ = failCmd
-	_ = failOutput
-	_ = fixCmd
-	return nil
+	embedding, err := encodeEmbeddingText(ctx, a.router, failCmd, failOutput)
+	if err != nil {
+		// Best-effort: embedding failure shouldn't block the heal flow.
+		return nil
+	}
+	return a.store.SavePattern(ctx, &models.Pattern{
+		FailCmd:     failCmd,
+		FailOutput:  failOutput,
+		FixCmd:      fixCmd,
+		SuccessRate: 1.0,
+		UseCount:    1,
+		Embedding:   embedding,
+	})
+}
+
+// recallPattern searches stored patterns for a similar past fix for the given
+// failure. Returns nil, nil if no match is found or embedding is unavailable.
+func (a *Agent) recallPattern(ctx context.Context, failCmd, failOutput string) (*models.HealSuggestion, error) {
+	embedding, err := embedText(ctx, a.router, failCmd, failOutput)
+	if err != nil {
+		return nil, nil
+	}
+
+	patterns, err := a.store.FindSimilarPatterns(ctx, embedding, 1)
+	if err != nil || len(patterns) == 0 {
+		return nil, nil
+	}
+
+	return &models.HealSuggestion{
+		OriginalCmd: failCmd,
+		FixCmd:      patterns[0].FixCmd,
+		Explanation: "recalled from similar past fix",
+	}, nil
+}
+
+// buildEmbeddingText concatenates the failed command and the first 500 chars
+// of its output to form the semantic context used for embedding.
+func buildEmbeddingText(failCmd, failOutput string) string {
+	text := failCmd + "\n"
+	if len(failOutput) > 500 {
+		return text + failOutput[:500]
+	}
+	return text + failOutput
+}
+
+// embedText embeds the failure context and returns the raw float32 vector.
+func embedText(ctx context.Context, router *llm.Router, failCmd, failOutput string) ([]float32, error) {
+	return router.Embed(ctx, buildEmbeddingText(failCmd, failOutput))
+}
+
+// encodeEmbeddingText embeds the failure context and returns the gob-encoded
+// bytes for persistence, matching gobDecodeFloats in the memory store.
+func encodeEmbeddingText(ctx context.Context, router *llm.Router, failCmd, failOutput string) ([]byte, error) {
+	vec, err := embedText(ctx, router, failCmd, failOutput)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(vec); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // RunOptions configures a single agent run.

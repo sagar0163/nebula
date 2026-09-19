@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"strings"
 
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
@@ -243,11 +244,22 @@ EXPLANATION: <one sentence explaining what went wrong and why the fix works>`, c
 }
 
 func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
-	// TODO: implement proper parsing of FIX:/EXPLANATION: response format.
+	var fix, explanation string
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "FIX:") {
+			fix = strings.TrimSpace(strings.TrimPrefix(line, "FIX:"))
+		} else if strings.HasPrefix(line, "EXPLANATION:") {
+			explanation = strings.TrimSpace(strings.TrimPrefix(line, "EXPLANATION:"))
+		}
+	}
+	if fix == "" {
+		return nil
+	}
 	return &models.HealSuggestion{
 		OriginalCmd: originalCmd,
-		FixCmd:      response, // placeholder
-		Explanation: "",
+		FixCmd:      fix,
+		Explanation: explanation,
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/sagar0163/nebula/internal/pty"
 	"github.com/sagar0163/nebula/internal/safety"
 	"github.com/sagar0163/nebula/internal/tui"
+	"github.com/zalando/go-keyring"
 )
 
 var (
@@ -103,9 +104,13 @@ func buildAgent() (*agent.Agent, error) {
 	// LLM router.
 	router := llm.NewRouter()
 
-	if key := viper.GetString("llm.groq.api_key"); key != "" {
+	groqKey := viper.GetString("llm.groq.api_key")
+	if groqKey == "" {
+		groqKey, _ = keyring.Get("nebula", "groq_api_key")
+	}
+	if groqKey != "" {
 		p := providers.NewGroq(providers.GroqConfig{
-			APIKey:        key,
+			APIKey:        groqKey,
 			ModelDiagnose: viper.GetString("llm.groq.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.groq.model_heal"),
 			ModelLearn:    viper.GetString("llm.groq.model_learn"),
@@ -117,9 +122,13 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	if key := viper.GetString("llm.gemini.api_key"); key != "" {
+	geminiKey := viper.GetString("llm.gemini.api_key")
+	if geminiKey == "" {
+		geminiKey, _ = keyring.Get("nebula", "gemini_api_key")
+	}
+	if geminiKey != "" {
 		p := providers.NewGemini(providers.GeminiConfig{
-			APIKey:        key,
+			APIKey:        geminiKey,
 			ModelDiagnose: viper.GetString("llm.gemini.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.gemini.model_heal"),
 			ModelLearn:    viper.GetString("llm.gemini.model_learn"),

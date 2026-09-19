@@ -8,6 +8,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -61,7 +62,12 @@ func New(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("ping sqlite database: %w", err)
 	}
 
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrationsFS)
+	subFS, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sub migrations fs: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, subFS)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init goose provider: %w", err)

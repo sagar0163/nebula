@@ -1,5 +1,5 @@
 # Binaries
-nebula
+/nebula
 dist/
 
 # Build artifacts

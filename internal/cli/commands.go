@@ -22,9 +22,7 @@ func newSetupCmd() *cobra.Command {
 		Use:   "setup",
 		Short: "Configure Nebula (AI provider, API keys, preferences)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: launch huh form wizard for first-time setup
-			fmt.Println("Setup wizard coming soon...")
-			return nil
+			return runSetupWizard()
 		},
 	}
 }

@@ -176,6 +176,18 @@ func (ad agentAdapter) Run(ctx context.Context, args []string, opts tui.AgentRun
 }
 
 func runInteractive() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+
+	configPath := filepath.Join(home, ".config", "nebula", "config.toml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := runSetupWizard(); err != nil {
+			return fmt.Errorf("run setup wizard: %w", err)
+		}
+	}
+
 	a, err := buildAgent()
 	if err != nil {
 		return fmt.Errorf("init agent: %w", err)

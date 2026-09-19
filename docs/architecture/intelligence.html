@@ -1,0 +1,971 @@
+<title>Nebula Intelligence</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap">
+
+<style>
+  /* ── Tokens ── */
+  :root {
+    --bg:        #0A0E1A;
+    --surface:   #111827;
+    --surface2:  #1A2236;
+    --border:    #1E2D4A;
+    --dim:       #4A5A72;
+    --muted:     #8B9BB4;
+    --text:      #E2E8F0;
+    --heading:   #F0F6FF;
+    --cyan:      #00D4FF;
+    --cyan-dim:  rgba(0,212,255,.12);
+    --amber:     #FFB020;
+    --amber-dim: rgba(255,176,32,.12);
+    --green:     #3DDB84;
+    --red:       #FF5C5C;
+    --purple:    #A78BFA;
+    --accent:    var(--cyan);
+    --mono:      'JetBrains Mono', monospace;
+    --sans:      'Inter', system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:        #F0F4FA;
+      --surface:   #FFFFFF;
+      --surface2:  #EBF0FA;
+      --border:    #CBD5E1;
+      --dim:       #94A3B8;
+      --muted:     #64748B;
+      --text:      #1E293B;
+      --heading:   #0F172A;
+      --cyan:      #0284C7;
+      --cyan-dim:  rgba(2,132,199,.1);
+      --amber:     #D97706;
+      --amber-dim: rgba(217,119,6,.1);
+      --green:     #059669;
+      --red:       #DC2626;
+      --purple:    #7C3AED;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:        #F0F4FA;
+    --surface:   #FFFFFF;
+    --surface2:  #EBF0FA;
+    --border:    #CBD5E1;
+    --dim:       #94A3B8;
+    --muted:     #64748B;
+    --text:      #1E293B;
+    --heading:   #0F172A;
+    --cyan:      #0284C7;
+    --cyan-dim:  rgba(2,132,199,.1);
+    --amber:     #D97706;
+    --amber-dim: rgba(217,119,6,.1);
+    --green:     #059669;
+    --red:       #DC2626;
+    --purple:    #7C3AED;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+    padding-inline: 0;
+  }
+
+  /* ── Header ── */
+  .header {
+    padding: 48px 32px 32px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .header-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    margin-bottom: 12px;
+  }
+  .header h1 {
+    font-size: clamp(28px, 5vw, 48px);
+    font-weight: 700;
+    color: var(--heading);
+    line-height: 1.15;
+    text-wrap: balance;
+    margin-bottom: 16px;
+  }
+  .header h1 span { color: var(--cyan); }
+  .header-sub {
+    font-size: 16px;
+    color: var(--muted);
+    max-width: 560px;
+    line-height: 1.7;
+  }
+  .header-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: var(--surface);
+  }
+  .badge.cyan { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+  .badge.amber { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); }
+
+  /* ── Tab Nav ── */
+  .tab-nav {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+  }
+  .tab-nav-inner {
+    display: flex;
+    gap: 0;
+    max-width: 900px;
+    margin: 0 auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab-nav-inner::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 14px 18px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--dim);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color .15s, border-color .15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+  /* ── Main ── */
+  .main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+  }
+
+  /* ── Section ── */
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* ── Section header ── */
+  .sec-header { margin-bottom: 32px; }
+  .sec-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 8px;
+  }
+  .sec-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--heading);
+    text-wrap: balance;
+    margin-bottom: 8px;
+  }
+  .sec-desc { color: var(--muted); max-width: 600px; line-height: 1.7; }
+
+  /* ── Diagrams ── */
+  .diagram-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 24px 0;
+    overflow-x: auto;
+  }
+  .diagram-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 16px;
+  }
+
+  /* ── Cards grid ── */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin: 24px 0; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .card-icon {
+    font-family: var(--mono);
+    font-size: 20px;
+    margin-bottom: 12px;
+    color: var(--cyan);
+  }
+  .card h3 { font-size: 14px; font-weight: 600; color: var(--heading); margin-bottom: 6px; }
+  .card p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .card.amber-card { border-color: color-mix(in srgb, var(--amber) 30%, var(--border)); }
+  .card.amber-card .card-icon { color: var(--amber); }
+  .card.green-card { border-color: color-mix(in srgb, var(--green) 25%, var(--border)); }
+  .card.green-card .card-icon { color: var(--green); }
+  .card.purple-card { border-color: color-mix(in srgb, var(--purple) 25%, var(--border)); }
+  .card.purple-card .card-icon { color: var(--purple); }
+
+  /* ── Pipeline ── */
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    margin: 24px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .pipe-step {
+    flex: 1;
+    min-width: 120px;
+    padding: 20px 16px;
+    border-right: 1px solid var(--border);
+    position: relative;
+  }
+  .pipe-step:last-child { border-right: none; }
+  .pipe-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .pipe-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--heading);
+    margin-bottom: 4px;
+  }
+  .pipe-desc { font-size: 12px; color: var(--muted); }
+  .pipe-step.cyan { background: var(--cyan-dim); border-bottom: 2px solid var(--cyan); }
+  .pipe-step.amber { background: var(--amber-dim); border-bottom: 2px solid var(--amber); }
+
+  /* ── Code block ── */
+  .code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    overflow-x: auto;
+    color: var(--text);
+    line-height: 1.7;
+    margin: 16px 0;
+  }
+  .code .kw { color: var(--purple); }
+  .code .fn { color: var(--cyan); }
+  .code .cm { color: var(--dim); }
+  .code .st { color: var(--green); }
+  .code .ty { color: var(--amber); }
+
+  /* ── Layer stack ── */
+  .layers { display: flex; flex-direction: column; gap: 2px; margin: 24px 0; }
+  .layer {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .layer-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .layer-name { font-size: 13px; font-weight: 600; color: var(--heading); min-width: 160px; }
+  .layer-desc { font-size: 12px; color: var(--muted); }
+  .layer-tag {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  /* ── Research card ── */
+  .research-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin: 24px 0; }
+  .rcard {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .rcard-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .rcard-pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-weight: 500;
+  }
+  .rcard-year { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-left: auto; }
+  .rcard h3 { font-size: 14px; font-weight: 600; color: var(--heading); margin-bottom: 6px; }
+  .rcard p { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+  .rcard-verdict {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+  .adopt { background: rgba(61,219,132,.1); color: var(--green); }
+  .consider { background: var(--amber-dim); color: var(--amber); }
+  .watch { background: rgba(167,139,250,.1); color: var(--purple); }
+
+  /* ── Divider ── */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* ── H2/H3 inline ── */
+  h2.inline { font-size: 17px; font-weight: 600; color: var(--heading); margin: 28px 0 12px; }
+  h3.inline { font-size: 14px; font-weight: 600; color: var(--heading); margin: 20px 0 8px; }
+  p.body { font-size: 14px; color: var(--muted); line-height: 1.7; margin-bottom: 12px; }
+
+  /* ── Provider row ── */
+  .providers { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+  .provider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    flex: 1;
+    min-width: 160px;
+  }
+  .provider-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .provider-name { font-size: 13px; font-weight: 600; color: var(--heading); }
+  .provider-note { font-size: 11px; color: var(--muted); }
+
+  /* ── Terminal demo ── */
+  .terminal {
+    background: #050810;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    margin: 24px 0;
+  }
+  .term-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .term-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .term-title { font-size: 11px; color: var(--dim); margin-left: auto; }
+  .t-prompt { color: var(--cyan); }
+  .t-cmd { color: var(--text); }
+  .t-err { color: var(--red); }
+  .t-think { color: var(--amber); font-style: italic; }
+  .t-fix { color: var(--green); }
+  .t-sys { color: var(--dim); }
+  .t-butler { color: var(--purple); }
+
+  @media (max-width: 600px) {
+    .header, .main { padding-inline: 16px; }
+    .tab-nav { padding-inline: 0; }
+    .tab-btn { padding: 12px 14px; font-size: 11px; }
+    .pipe-step { min-width: 100px; padding: 14px 12px; }
+  }
+</style>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-eyebrow">// nebula · intelligent architecture</div>
+  <h1>How Nebula <span>Thinks</span></h1>
+  <p class="header-sub">The cognitive architecture behind an AI terminal agent that acts as an active butler — anticipating failures, remembering workflows, and routing intelligence across any LLM.</p>
+  <div class="header-badges">
+    <span class="badge cyan">ReAct Loop</span>
+    <span class="badge cyan">Episodic Memory</span>
+    <span class="badge cyan">Planner / Executor Split</span>
+    <span class="badge amber">Any LLM</span>
+    <span class="badge amber">Proactive Butler</span>
+    <span class="badge">Go · Single Binary</span>
+  </div>
+</header>
+
+<!-- Tab Nav -->
+<nav class="tab-nav">
+  <div class="tab-nav-inner">
+    <button class="tab-btn active" onclick="showTab('core')">Core Loop</button>
+    <button class="tab-btn" onclick="showTab('memory')">Memory</button>
+    <button class="tab-btn" onclick="showTab('llm')">LLM Routing</button>
+    <button class="tab-btn" onclick="showTab('butler')">Butler Mode</button>
+    <button class="tab-btn" onclick="showTab('safety')">Safety</button>
+    <button class="tab-btn" onclick="showTab('research')">Research</button>
+  </div>
+</nav>
+
+<main class="main">
+
+  <!-- ═══════════════════ CORE LOOP ═══════════════════ -->
+  <section class="section active" id="tab-core">
+    <div class="sec-header">
+      <div class="sec-eyebrow">01 · Thinking Engine</div>
+      <div class="sec-title">The ReAct + Reflexion Loop</div>
+      <p class="sec-desc">Nebula's core cognition is a ReAct loop (Reason → Act → Observe) augmented with Reflexion — learning from mistakes by persisting self-critique into long-term memory.</p>
+    </div>
+
+    <div class="terminal">
+      <div class="term-bar">
+        <div class="term-dot" style="background:#FF5C5C"></div>
+        <div class="term-dot" style="background:#FFB020"></div>
+        <div class="term-dot" style="background:#3DDB84"></div>
+        <div class="term-title">nebula · live session</div>
+      </div>
+      <div><span class="t-prompt">❯ </span><span class="t-cmd">docker compose up -d</span></div>
+      <div class="t-err">Error: Bind for 0.0.0.0:5432 failed: port is already allocated</div>
+      <div><br></div>
+      <div class="t-think">◈ [OBSERVE] Exit code 1 · stderr captured · pattern match: port conflict</div>
+      <div class="t-think">◈ [REASON]  Port 5432 occupied → find occupying PID → remap or kill</div>
+      <div class="t-think">◈ [SEARCH]  Checking episodic memory... 2 similar fixes found (confidence 0.91)</div>
+      <div class="t-think">◈ [PLAN]    Option A: remap port  Option B: kill PID  — recommending A (safer)</div>
+      <div><br></div>
+      <div class="t-fix">✦ Suggested fix: docker compose up -d -e DB_PORT=5433</div>
+      <div class="t-sys">  Port conflict on 5432 · remapping to 5433 · this fix has succeeded 4× before</div>
+      <div class="t-sys">  Apply? [y] yes  [n] no  [e] edit  [?] explain  [s] save rule</div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="diagram-label">// core agent loop</div>
+      <pre class="mermaid">
+flowchart LR
+  A([User Command]) --> B[PTY Harness\nCapture + Tee]
+  B --> C{Exit Code}
+  C -- 0 --> D[Save to\nEpisodic Memory]
+  C -- ≠0 --> E[OBSERVE\nCapture stderr\n+ context]
+  E --> F[REASON\nFast LLM\nDiagnosis]
+  F --> G[SEARCH\nVector Memory\nSimilar Fixes]
+  G --> H[PLAN\nGenerate Fix\nOptions]
+  H --> I{Safety\nPolicy}
+  I -- Deny --> J[Block + Explain]
+  I -- Ask --> K[Approval UI\ny/n/edit/explain]
+  I -- Allow --> L[EXECUTE\nFix Command]
+  K -- Yes --> L
+  K -- No --> M[Log Rejection]
+  L --> N{Fix\nSucceeded?}
+  N -- Yes --> O[REFLECT\nSave Pattern\n+ Embedding]
+  N -- No --> F
+  O --> D
+      </pre>
+    </div>
+
+    <h2 class="inline">Planner / Executor Split</h2>
+    <p class="body">Inspired by OpenDev's 2026 architecture: the Planner can only read and search — it cannot execute. The Executor only runs pre-approved steps. This prevents runaway chains where an LLM both decides and acts without a checkpoint.</p>
+
+    <div class="pipeline">
+      <div class="pipe-step cyan">
+        <div class="pipe-num">01</div>
+        <div class="pipe-name">Observe</div>
+        <div class="pipe-desc">PTY sentinel detects failure, captures exit code + stderr slice</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">02</div>
+        <div class="pipe-name">Reason</div>
+        <div class="pipe-desc">Fast LLM diagnoses root cause from error + transcript context</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">03</div>
+        <div class="pipe-name">Search</div>
+        <div class="pipe-desc">Cosine search over past fix embeddings, weight by success rate</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">04</div>
+        <div class="pipe-name">Plan</div>
+        <div class="pipe-desc">Stronger LLM proposes ranked fix options (Planner — read-only)</div>
+      </div>
+      <div class="pipe-step amber">
+        <div class="pipe-num">05</div>
+        <div class="pipe-name">Approve</div>
+        <div class="pipe-desc">User confirms. No auto-exec without explicit yes (or saved rule)</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">06</div>
+        <div class="pipe-name">Execute</div>
+        <div class="pipe-desc">Executor runs fix inside sandboxed PTY with timeout</div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">07</div>
+        <div class="pipe-name">Reflect</div>
+        <div class="pipe-desc">Outcome persisted. Embedding saved. Pattern updated for next time</div>
+      </div>
+    </div>
+
+    <h2 class="inline">Doom-Loop Prevention</h2>
+    <p class="body">The agent fingerprints each (command, error-hash) pair. If the same fix is suggested 3× without success, Nebula stops auto-retrying and escalates to the user — preventing infinite healing loops on genuinely broken environments.</p>
+  </section>
+
+  <!-- ═══════════════════ MEMORY ═══════════════════ -->
+  <section class="section" id="tab-memory">
+    <div class="sec-header">
+      <div class="sec-eyebrow">02 · Memory Architecture</div>
+      <div class="sec-title">Four-Layer Persistent Memory</div>
+      <p class="sec-desc">Like a human expert, Nebula has distinct memory systems — each optimised for different retrieval patterns and decay rates.</p>
+    </div>
+
+    <div class="layers">
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--cyan)"></div>
+        <div class="layer-name">Working Memory</div>
+        <div class="layer-desc">Current session PTY ring buffer (32KB). Last N commands + outputs. In-memory only — zero latency for context injection.</div>
+        <span class="layer-tag" style="background:var(--cyan-dim);color:var(--cyan)">RAM · transient</span>
+      </div>
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--green)"></div>
+        <div class="layer-name">Episodic Memory</div>
+        <div class="layer-desc">SQLite: every command, exit code, session, timestamp, workdir. Time-indexed. "What did I do last Tuesday in this repo?"</div>
+        <span class="layer-tag" style="background:rgba(61,219,132,.1);color:var(--green)">SQLite · durable</span>
+      </div>
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--amber)"></div>
+        <div class="layer-name">Semantic Memory</div>
+        <div class="layer-desc">Vector embeddings of past failures + fixes. Cosine similarity search. "Find the last time I hit a port conflict and what fixed it."</div>
+        <span class="layer-tag" style="background:var(--amber-dim);color:var(--amber)">float32 vectors · SQLite</span>
+      </div>
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--purple)"></div>
+        <div class="layer-name">Procedural Memory</div>
+        <div class="layer-desc">Learned workflow patterns — frequent command sequences (freq-itemset mining). "After git commit you usually run git push origin HEAD."</div>
+        <span class="layer-tag" style="background:rgba(167,139,250,.1);color:var(--purple)">patterns · proactive</span>
+      </div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="diagram-label">// two-phase memory extraction (OpenDev pattern)</div>
+      <pre class="mermaid">
+flowchart TD
+  A[Session Ends] --> B[Phase 1 · Extract\nPull salient commands,\nfixes, outcomes]
+  B --> C[Phase 2 · Consolidate\nMerge with existing patterns,\nupdate success rates,\nre-embed changed entries]
+  C --> D[(SQLite Store\nEpisodic + Semantic)]
+  D --> E[Future Session\nContext Injection]
+  E --> F{Retrieval Mode}
+  F -- Exact --> G[Hash lookup\nO·1]
+  F -- Semantic --> H[Cosine search\nover embeddings]
+  F -- Temporal --> I[Recency query\nORDER BY time DESC]
+      </pre>
+    </div>
+
+    <h2 class="inline">Context Window Management</h2>
+    <p class="body">Long sessions hit LLM context limits. Nebula uses a 5-stage progressive compaction from OpenDev's research: raw transcript → filtered → summarised → key-facts → single-sentence. Each stage halves the token count while preserving the causal chain needed for healing decisions.</p>
+
+    <div class="code">
+<span class="cm">// Five-stage context compaction</span>
+<span class="ty">Stage 1</span>: Raw ring buffer          <span class="cm">// 32KB  — last 200 lines</span>
+<span class="ty">Stage 2</span>: Filter noise              <span class="cm">// 16KB  — strip progress bars, spinners</span>
+<span class="ty">Stage 3</span>: Summarise per-command      <span class="cm">// 4KB   — cmd + exit + 1 sentence outcome</span>
+<span class="ty">Stage 4</span>: Key facts only             <span class="cm">// 1KB   — errors, fixes, env facts</span>
+<span class="ty">Stage 5</span>: Single causal sentence     <span class="cm">// 200t  — "port conflict, remapped to 5433"</span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ LLM ROUTING ═══════════════════ -->
+  <section class="section" id="tab-llm">
+    <div class="sec-header">
+      <div class="sec-eyebrow">03 · LLM Routing</div>
+      <div class="sec-title">Any LLM, Workload-Specialized</div>
+      <p class="sec-desc">One Provider interface, any backend. The router picks the right model tier per task — cheap and fast for diagnosis, powerful for healing, local for privacy.</p>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="diagram-label">// provider interface + workload router</div>
+      <pre class="mermaid">
+flowchart LR
+  subgraph Workloads
+    W1[Diagnose\nfast · cheap]
+    W2[Heal\nmid-tier]
+    W3[Learn\nstrong]
+    W4[Embed\nlocal]
+  end
+
+  subgraph Router
+    R[Workload Router\npriority chain\n+ fallback]
+  end
+
+  subgraph Providers
+    P1[Groq\nLlama 3.1 8B / 70B]
+    P2[Gemini\nFlash / Pro]
+    P3[Ollama\nlocal · private]
+    P4[OpenAI\ngpt-4o-mini / 4o]
+    P5[Any OpenAI-compat\nOpenRouter · vLLM · LM Studio]
+  end
+
+  W1 & W2 & W3 & W4 --> R
+  R --> P1
+  R --> P2
+  R --> P3
+  R --> P4
+  R --> P5
+      </pre>
+    </div>
+
+    <h2 class="inline">Supported Providers</h2>
+    <div class="providers">
+      <div class="provider">
+        <div class="provider-dot" style="background:#F97316"></div>
+        <div>
+          <div class="provider-name">Groq</div>
+          <div class="provider-note">Llama 3.1 8B instant · 70B versatile</div>
+        </div>
+      </div>
+      <div class="provider">
+        <div class="provider-dot" style="background:#4285F4"></div>
+        <div>
+          <div class="provider-name">Gemini</div>
+          <div class="provider-note">Flash (diagnose) · Pro (heal/learn)</div>
+        </div>
+      </div>
+      <div class="provider">
+        <div class="provider-dot" style="background:#3DDB84"></div>
+        <div>
+          <div class="provider-name">Ollama</div>
+          <div class="provider-note">Local · private · offline mode</div>
+        </div>
+      </div>
+      <div class="provider">
+        <div class="provider-dot" style="background:#10A37F"></div>
+        <div>
+          <div class="provider-name">OpenAI</div>
+          <div class="provider-note">gpt-4o-mini · gpt-4o</div>
+        </div>
+      </div>
+      <div class="provider">
+        <div class="provider-dot" style="background:#A78BFA"></div>
+        <div>
+          <div class="provider-name">Any OpenAI-compat</div>
+          <div class="provider-note">OpenRouter · vLLM · LM Studio · Cerebras</div>
+        </div>
+      </div>
+      <div class="provider">
+        <div class="provider-dot" style="background:#FFB020"></div>
+        <div>
+          <div class="provider-name">Anthropic Claude</div>
+          <div class="provider-note">via OpenRouter or native SDK (roadmap)</div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="inline">Router Policy</h2>
+    <div class="code">
+<span class="cm">// Workload → model mapping in config.toml</span>
+[llm.groq]
+model_<span class="fn">diagnose</span> = <span class="st">"llama-3.1-8b-instant"</span>   <span class="cm">// &lt;1s latency — classify failures</span>
+model_<span class="fn">heal</span>     = <span class="st">"llama-3.3-70b-versatile"</span> <span class="cm">// quality fix suggestions</span>
+model_<span class="fn">learn</span>    = <span class="st">"llama-3.3-70b-versatile"</span> <span class="cm">// workflow pattern extraction</span>
+model_<span class="fn">embed</span>    = <span class="st">""</span>                         <span class="cm">// falls back to Ollama nomic-embed</span>
+
+<span class="cm">// Fallback chain: if Groq is down → Gemini → Ollama (local)</span>
+<span class="cm">// Available() health-checked before each request</span>
+    </div>
+
+    <h2 class="inline">Streaming Architecture</h2>
+    <p class="body">Every completion streams — tokens arrive as <code style="font-family:var(--mono);color:var(--cyan)">tea.Msg</code> events in the bubbletea TUI, keeping the UI responsive. Three channels surface to the UI: content deltas, tool-call deltas (rendered as "running git status…"), and final usage/cost. Context is always cancellable — Ctrl+C kills the stream and the PTY child cleanly.</p>
+  </section>
+
+  <!-- ═══════════════════ BUTLER MODE ═══════════════════ -->
+  <section class="section" id="tab-butler">
+    <div class="sec-header">
+      <div class="sec-eyebrow">04 · Proactive Intelligence</div>
+      <div class="sec-title">Active Butler Mode</div>
+      <p class="sec-desc">Nebula doesn't wait to be asked. It monitors context, anticipates what comes next, and surfaces the right suggestion at the right moment — like a senior colleague watching over your shoulder.</p>
+    </div>
+
+    <div class="terminal">
+      <div class="term-bar">
+        <div class="term-dot" style="background:#FF5C5C"></div>
+        <div class="term-dot" style="background:#FFB020"></div>
+        <div class="term-dot" style="background:#3DDB84"></div>
+        <div class="term-title">nebula · butler suggestions</div>
+      </div>
+      <div><span class="t-prompt">❯ </span><span class="t-cmd">git commit -m "fix: auth flow"</span></div>
+      <div class="t-sys">[main 3a9f1c2] fix: auth flow</div>
+      <div class="t-butler">◆ nebula · you usually push after committing on this branch</div>
+      <div class="t-butler">  Suggest: git push origin main  [y] run  [n] skip  [s] stop suggesting this</div>
+      <div><br></div>
+      <div><span class="t-prompt">❯ </span><span class="t-cmd">npm install</span></div>
+      <div class="t-sys">added 847 packages in 12s</div>
+      <div class="t-butler">◆ nebula · package.json changed — 3 new deps added since last run</div>
+      <div class="t-butler">  security: 1 moderate vulnerability · run npm audit fix?</div>
+      <div><br></div>
+      <div><span class="t-prompt">❯ </span><span class="t-cmd">cd ../api</span></div>
+      <div class="t-butler">◆ nebula · switching to api/ · .env missing · last time this caused a crash</div>
+      <div class="t-butler">  copy from .env.example?  [y] yes  [n] no</div>
+    </div>
+
+    <h2 class="inline">Proactive Trigger System</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">⊕</div>
+        <h3>Workflow Momentum</h3>
+        <p>Freq-itemset mining over command history detects N-grams ("commit → push → PR"). After the first step, Nebula suggests the next.</p>
+      </div>
+      <div class="card amber-card">
+        <div class="card-icon">⊛</div>
+        <h3>Context Change Detector</h3>
+        <p>Watches for: directory change, git branch switch, new .env.example, Docker file changes. Each triggers a relevant check or suggestion.</p>
+      </div>
+      <div class="card green-card">
+        <div class="card-icon">⊜</div>
+        <h3>Pre-emptive Failure Scan</h3>
+        <p>Before you run a known-risky command, Nebula checks if its preconditions are met (port free? service running? credentials set?).</p>
+      </div>
+      <div class="card purple-card">
+        <div class="card-icon">⊝</div>
+        <h3>Universal Predictor</h3>
+        <p>Semantic similarity search over past sessions: "this looks like that time you were deploying to staging — here's what tripped you up."</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">⊞</div>
+        <h3>Ambient Health Monitor</h3>
+        <p>Watches background services (Docker, k8s, DB) and surfaces alerts when something relevant to your current task starts failing.</p>
+      </div>
+      <div class="card amber-card">
+        <div class="card-icon">⊟</div>
+        <h3>Session Continuity</h3>
+        <p>On startup, scans last session for incomplete workflows. "You were deploying yesterday — the migration never ran. Continue?"</p>
+      </div>
+    </div>
+
+    <h2 class="inline">Butler Personality Principles</h2>
+    <p class="body">A good butler surfaces information at the right moment, never intrudes, and learns when to stay quiet. Nebula enforces three rules:</p>
+    <div class="layers" style="margin-top:12px">
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--green)"></div>
+        <div class="layer-name">One suggestion at a time</div>
+        <div class="layer-desc">Never queue multiple suggestions. Surface the most relevant, suppress the rest.</div>
+      </div>
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--amber)"></div>
+        <div class="layer-name">Learn silence</div>
+        <div class="layer-desc">User says "n" three times to the same pattern → permanently suppress it. [s] key saves a "stop suggesting this" rule.</div>
+      </div>
+      <div class="layer">
+        <div class="layer-dot" style="background:var(--cyan)"></div>
+        <div class="layer-name">Zero blocking</div>
+        <div class="layer-desc">Butler suggestions never block the prompt. They appear as a non-blocking overlay and auto-dismiss after 10s.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ SAFETY ═══════════════════ -->
+  <section class="section" id="tab-safety">
+    <div class="sec-header">
+      <div class="sec-eyebrow">05 · Safety Architecture</div>
+      <div class="sec-title">Five Independent Defense Layers</div>
+      <p class="sec-desc">Each layer can stop a class of harm independently. Safety is not a checkbox — it's a pipeline that runs before any AI-suggested command touches the OS.</p>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="diagram-label">// safety pipeline — every AI-suggested command passes all five</div>
+      <pre class="mermaid">
+flowchart TD
+  A[AI Suggests Command] --> B[Layer 1\nParse + Classify\nsafe / low / medium / high / dangerous]
+  B -- dangerous --> DENY[🚫 Hard Deny\nno override]
+  B -- safe/low --> C[Layer 2\nPermission Engine\npersisted allow/ask/deny rules]
+  B -- medium/high --> C
+  C -- deny --> DENY2[🚫 Policy Deny]
+  C -- ask --> D[Layer 3\nUser Approval\ny/n/edit/explain/save-rule]
+  C -- allow --> E[Layer 4\nOS Sandbox\nbubblewrap Linux\nsandbox-exec macOS]
+  D -- yes --> E
+  D -- no --> REJECT[↩ Rejected]
+  E --> F[Layer 5\nRuntime Controls\ntimeout · doom-loop · audit log]
+  F --> G[✓ Execute]
+  G --> H[(Audit Log\nappend-only SQLite)]
+      </pre>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">⬡</div>
+        <h3>Hard-Deny Vectors</h3>
+        <p>Interpreter bypass vectors are always denied regardless of rules: <code style="font-family:var(--mono);color:var(--red)">bash -c</code>, <code style="font-family:var(--mono);color:var(--red)">python -c</code>, <code style="font-family:var(--mono);color:var(--red)">node -e</code>, <code style="font-family:var(--mono);color:var(--red)">sudo</code> — these let an LLM execute arbitrary code by wrapping the real command.</p>
+      </div>
+      <div class="card amber-card">
+        <div class="card-icon">⬡</div>
+        <h3>Context Scrubber</h3>
+        <p>Before any text is sent to an external LLM: regex strips <code style="font-family:var(--mono);color:var(--amber)">AWS_*</code>, <code style="font-family:var(--mono);color:var(--amber)">sk-*</code>, <code style="font-family:var(--mono);color:var(--amber)">GITHUB_TOKEN</code>, and similar patterns. Your secrets never leave the machine.</p>
+      </div>
+      <div class="card green-card">
+        <div class="card-icon">⬡</div>
+        <h3>Git Snapshot Undo</h3>
+        <p>Before any file-mutating command, Nebula offers to snapshot via git stash. One keystroke rolls back any AI-applied edit.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ RESEARCH ═══════════════════ -->
+  <section class="section" id="tab-research">
+    <div class="sec-header">
+      <div class="sec-eyebrow">06 · Research & Prior Art</div>
+      <div class="sec-title">Ideas Worth Adopting</div>
+      <p class="sec-desc">Synthesis of academic papers, production systems, and industry patterns that directly inform Nebula's architecture. Rated by adoption priority.</p>
+    </div>
+
+    <h2 class="inline">Academic Foundations</h2>
+    <div class="research-cards">
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(61,219,132,.1);color:var(--green)">CORE</span>
+          <span class="rcard-year">2022</span>
+        </div>
+        <h3>ReAct: Synergizing Reasoning and Acting</h3>
+        <p>Yao et al. (Google). Interleaving chain-of-thought reasoning with tool actions. The LLM thinks aloud before acting — dramatically improves success rate on multi-step tasks vs. pure acting.</p>
+        <div class="rcard-verdict adopt">✓ Adopt — foundation of Nebula's diagnose loop</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(61,219,132,.1);color:var(--green)">CORE</span>
+          <span class="rcard-year">2023</span>
+        </div>
+        <h3>Reflexion: Language Agents with Verbal Reinforcement</h3>
+        <p>Shinn et al. Agents write self-critiques after failure and store them in memory. Next attempt starts with the critique as context. Raises task success from 73% → 91% on benchmarks.</p>
+        <div class="rcard-verdict adopt">✓ Adopt — powers Nebula's pattern learning + improve loop</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:var(--amber-dim);color:var(--amber)">CONSIDER</span>
+          <span class="rcard-year">2023</span>
+        </div>
+        <h3>Tree of Thoughts</h3>
+        <p>Yao et al. Instead of one fix suggestion, explore a tree of candidates, evaluate each, prune bad branches. Best for ambiguous failures where the cause isn't obvious.</p>
+        <div class="rcard-verdict consider">→ Consider for multi-step healing chains (v2)</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(61,219,132,.1);color:var(--green)">CORE</span>
+          <span class="rcard-year">2026</span>
+        </div>
+        <h3>OpenDev: Agentic Shell Architecture</h3>
+        <p>Planner/Executor split, workload-specialized routing, 5-stage context compaction, lazy MCP tool discovery, two-phase memory, doom-loop detection. First published paper to systematize production CLI agent design.</p>
+        <div class="rcard-verdict adopt">✓ Adopt — multiple patterns directly in Nebula</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(167,139,250,.1);color:var(--purple)">WATCH</span>
+          <span class="rcard-year">2024</span>
+        </div>
+        <h3>MemGPT: LLMs as Operating Systems</h3>
+        <p>Treats context window as main memory, SQLite as disk. Self-directed memory paging — the LLM decides what to recall and evict. Enables effectively unbounded context.</p>
+        <div class="rcard-verdict watch">◎ Watch — implement simplified version for long sessions</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:var(--amber-dim);color:var(--amber)">CONSIDER</span>
+          <span class="rcard-year">2024</span>
+        </div>
+        <h3>AAIF Agent-to-Agent Protocol</h3>
+        <p>Linux Foundation standard for multi-agent communication. Nebula could spawn specialist sub-agents (docker-expert, k8s-expert) and coordinate via A2A for complex failures outside its own training.</p>
+        <div class="rcard-verdict consider">→ Consider for multi-agent healing (v2)</div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <h2 class="inline">Production Systems</h2>
+    <div class="research-cards">
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(61,219,132,.1);color:var(--green)">ADOPT</span>
+          <span class="rcard-year">Codex CLI</span>
+        </div>
+        <h3>Exec Policy Rule Engine</h3>
+        <p>DSL-based allow/deny rules in <code style="font-family:var(--mono)">~/.codex/rules/</code>. Pattern: <code style="font-family:var(--mono)">Bash(git push:*)</code> allows all git push variants. Subcommand-aware so you can't bypass with <code style="font-family:var(--mono)">git --exec-path</code>.</p>
+        <div class="rcard-verdict adopt">✓ Adopt — implement DSL for Nebula's permission rules</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(61,219,132,.1);color:var(--green)">ADOPT</span>
+          <span class="rcard-year">Warp Terminal</span>
+        </div>
+        <h3>Block-based Command Output</h3>
+        <p>Each command is a discrete block with its own exit status, timing, and AI annotation. Output is never a stream of raw bytes — it's structured, scrollable, and searchable.</p>
+        <div class="rcard-verdict adopt">✓ Adopt — Nebula TUI should treat each command as a typed block</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:rgba(61,219,132,.1);color:var(--green)">ADOPT</span>
+          <span class="rcard-year">Claude Code</span>
+        </div>
+        <h3>Background Task Promotion</h3>
+        <p>Long-running commands are "promoted" to a background task with a spinner. The REPL stays responsive. On finish, a notification appears with the result — no blocking.</p>
+        <div class="rcard-verdict adopt">✓ Adopt — critical for slow builds/deploys in Nebula</div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-top">
+          <span class="rcard-pill" style="background:var(--amber-dim);color:var(--amber)">CONSIDER</span>
+          <span class="rcard-year">Goose / AAIF</span>
+        </div>
+        <h3>JSON-RPC App Server</h3>
+        <p>Decouple the agent runtime from the TUI by exposing it over stdio JSON-RPC. The same core can power the terminal TUI, a VS Code extension, a web UI, or another agent as a tool.</p>
+        <div class="rcard-verdict consider">→ Consider for v2 — enables IDE integration without rewrite</div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <h2 class="inline">Proposed New Ideas for Nebula</h2>
+    <div class="cards">
+      <div class="card cyan-card" style="border-color:color-mix(in srgb, var(--cyan) 30%, var(--border))">
+        <div class="card-icon" style="color:var(--cyan)">◈</div>
+        <h3>Confidence-Gated Auto-Healing</h3>
+        <p>Only auto-apply fixes when semantic memory confidence ≥ 0.95 AND the same fix has worked 3+ times. Anything below that threshold always asks. Confidence shown to user inline.</p>
+      </div>
+      <div class="card amber-card">
+        <div class="card-icon">◈</div>
+        <h3>Failure Taxonomy</h3>
+        <p>Classify every failure into a structured type: NetworkError / PortConflict / PermissionDenied / MissingDep / ConfigMissing. Route each type to a specialized sub-prompt tuned for that class.</p>
+      </div>
+      <div class="card green-card">
+        <div class="card-icon">◈</div>
+        <h3>Community Pattern Sync</h3>
+        <p>Anonymized, opt-in: export your success patterns (cmd-hash + fix-hash + success-rate, no content) to a community DB. Pull community fixes for errors you've never seen before.</p>
+      </div>
+      <div class="card purple-card">
+        <div class="card-icon">◈</div>
+        <h3>Offline-First with Sync</h3>
+        <p>Full functionality with local Ollama (nomic-embed + llama3.2). When online, stronger models augment but never replace local memory. Your data stays on-machine permanently.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon" style="color:var(--cyan)">◈</div>
+        <h3>Evals as First-Class Feature</h3>
+        <p>Every healing attempt logged as: (failure, suggestion, applied, outcome). Built-in <code style="font-family:var(--mono)">nebula eval</code> command shows your personal heal-rate dashboard — self-healing is measurable, not marketing.</p>
+      </div>
+      <div class="card amber-card">
+        <div class="card-icon">◈</div>
+        <h3>Shell-Native Init Hook</h3>
+        <p><code style="font-family:var(--mono)">eval "$(nebula init bash)"</code> injects PROMPT_COMMAND sentinels and keybindings at shell level — no PTY wrapping needed. Deeper integration, lower overhead, works in any terminal.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function showTab(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+</script>

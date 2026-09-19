@@ -1,6 +1,7 @@
 package safety
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -51,6 +52,18 @@ var readOnlyPrefixes = []string{
 	"git status", "git log", "git diff", "git show",
 	"docker ps", "docker images",
 	"kubectl get", "kubectl describe",
+}
+
+// scrubPatterns are compiled at init time and matched against text before
+// it is sent to an external LLM API. Anything they match is redacted.
+var scrubPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),                             // AWS access key
+	regexp.MustCompile(`(?i)aws_secret[_a-z]*\s*=\s*[^\s]{20,}`),       // AWS secret assignment
+	regexp.MustCompile(`(?i)(api_key|apikey|api-key)\s*[:=]\s*\S{8,}`), // generic API key assignment
+	regexp.MustCompile(`sk-[a-zA-Z0-9]{20,}`),                          // OpenAI/Anthropic key
+	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36}`),                    // GitHub token
+	regexp.MustCompile(`Bearer\s+[A-Za-z0-9\-_\.]{20,}`),               // bearer token
+	regexp.MustCompile(`(?i)password\s*[:=]\s*\S{4,}`),                 // generic password assignment
 }
 
 // Classify assesses the risk level of a raw command string.
@@ -105,7 +118,11 @@ func Decide(r Risk, skipPermissions bool) Decision {
 // ScrubSecrets removes common secret patterns from text before
 // sending it to an external LLM API.
 func ScrubSecrets(text string) string {
-	// TODO: implement regex scrubbing for AWS_, sk-, GITHUB_TOKEN, etc.
-	// Placeholder — real implementation uses compiled regexp patterns.
+	if text == "" {
+		return text
+	}
+	for _, re := range scrubPatterns {
+		text = re.ReplaceAllString(text, "[REDACTED]")
+	}
 	return text
 }

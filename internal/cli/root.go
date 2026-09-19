@@ -158,6 +158,47 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
+	mistralKey := viper.GetString("llm.mistral.api_key")
+	if mistralKey == "" {
+		mistralKey, _ = keyring.Get("nebula", "mistral_api_key")
+	}
+	if mistralKey != "" {
+		p := providers.NewMistral(providers.MistralConfig{
+			APIKey:        mistralKey,
+			ModelDiagnose: viper.GetString("llm.mistral.model_diagnose"),
+			ModelHeal:     viper.GetString("llm.mistral.model_heal"),
+			ModelLearn:    viper.GetString("llm.mistral.model_learn"),
+			ModelEmbed:    viper.GetString("llm.mistral.model_embed"),
+		})
+		if p != nil {
+			router.Register(llm.WorkloadDiagnose, p)
+			router.Register(llm.WorkloadHeal, p)
+			router.Register(llm.WorkloadLearn, p)
+			router.Register(llm.WorkloadEmbed, p)
+		}
+	}
+
+	nvidiaKey := viper.GetString("llm.nvidia.api_key")
+	if nvidiaKey == "" {
+		nvidiaKey, _ = keyring.Get("nebula", "nvidia_api_key")
+	}
+	if nvidiaKey != "" {
+		p := providers.NewNvidia(providers.NvidiaConfig{
+			APIKey:        nvidiaKey,
+			BaseURL:       viper.GetString("llm.nvidia.base_url"),
+			ModelDiagnose: viper.GetString("llm.nvidia.model_diagnose"),
+			ModelHeal:     viper.GetString("llm.nvidia.model_heal"),
+			ModelLearn:    viper.GetString("llm.nvidia.model_learn"),
+			ModelEmbed:    viper.GetString("llm.nvidia.model_embed"),
+		})
+		if p != nil {
+			router.Register(llm.WorkloadDiagnose, p)
+			router.Register(llm.WorkloadHeal, p)
+			router.Register(llm.WorkloadLearn, p)
+			router.Register(llm.WorkloadEmbed, p)
+		}
+	}
+
 	harness := pty.NewHarness(0)
 	return agent.New(harness, router, store), nil
 }

@@ -1,11 +1,22 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/sagar0163/nebula/internal/agent"
+	"github.com/sagar0163/nebula/internal/llm"
+	"github.com/sagar0163/nebula/internal/llm/providers"
+	"github.com/sagar0163/nebula/internal/memory"
+	"github.com/sagar0163/nebula/internal/pty"
+	"github.com/sagar0163/nebula/internal/safety"
+	"github.com/sagar0163/nebula/internal/tui"
 )
 
 var (
@@ -20,12 +31,6 @@ var rootCmd = &cobra.Command{
 	Long: `Nebula is a terminal agent that learns from your commands and
 automatically fixes failures. When a command fails, it analyzes the
 error, suggests a fix, and lets you apply it with one keystroke.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return runInteractive()
-		}
-		return runCommand(args)
-	},
 }
 
 func Execute() {
@@ -41,6 +46,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.config/nebula/config.toml)")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would run without executing")
 	rootCmd.PersistentFlags().Bool("dangerously-skip-permissions", false, "skip all permission checks (use with extreme caution)")
+
+	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return runInteractive()
+		}
+		return runCommand(args)
+	}
 
 	rootCmd.AddCommand(
 		newSetupCmd(),
@@ -72,14 +84,126 @@ func initConfig() {
 	}
 }
 
+// buildAgent constructs the agent from viper config.
+func buildAgent() (*agent.Agent, error) {
+	// Memory store.
+	home, _ := os.UserHomeDir()
+	dbPath := viper.GetString("memory.db_path")
+	if dbPath == "" {
+		dbPath = filepath.Join(home, ".local", "share", "nebula", "nebula.db")
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, fmt.Errorf("create data dir: %w", err)
+	}
+	store, err := memory.New(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open memory store: %w", err)
+	}
+
+	// LLM router.
+	router := llm.NewRouter()
+
+	if key := viper.GetString("llm.groq.api_key"); key != "" {
+		p := providers.NewGroq(providers.GroqConfig{
+			APIKey:        key,
+			ModelDiagnose: viper.GetString("llm.groq.model_diagnose"),
+			ModelHeal:     viper.GetString("llm.groq.model_heal"),
+			ModelLearn:    viper.GetString("llm.groq.model_learn"),
+		})
+		if p != nil {
+			router.Register(llm.WorkloadDiagnose, p)
+			router.Register(llm.WorkloadHeal, p)
+			router.Register(llm.WorkloadLearn, p)
+		}
+	}
+
+	if key := viper.GetString("llm.gemini.api_key"); key != "" {
+		p := providers.NewGemini(providers.GeminiConfig{
+			APIKey:        key,
+			ModelDiagnose: viper.GetString("llm.gemini.model_diagnose"),
+			ModelHeal:     viper.GetString("llm.gemini.model_heal"),
+			ModelLearn:    viper.GetString("llm.gemini.model_learn"),
+			ModelEmbed:    viper.GetString("llm.gemini.model_embed"),
+		})
+		if p != nil {
+			router.Register(llm.WorkloadDiagnose, p)
+			router.Register(llm.WorkloadHeal, p)
+			router.Register(llm.WorkloadLearn, p)
+			router.Register(llm.WorkloadEmbed, p)
+		}
+	}
+
+	if base := viper.GetString("llm.ollama.base_url"); base != "" {
+		p, err := providers.NewOllama(providers.OllamaConfig{
+			BaseURL:       base,
+			ModelDiagnose: viper.GetString("llm.ollama.model_diagnose"),
+			ModelHeal:     viper.GetString("llm.ollama.model_heal"),
+			ModelLearn:    viper.GetString("llm.ollama.model_learn"),
+			ModelEmbed:    viper.GetString("llm.ollama.model_embed"),
+		})
+		if err == nil {
+			router.Register(llm.WorkloadDiagnose, p)
+			router.Register(llm.WorkloadHeal, p)
+			router.Register(llm.WorkloadLearn, p)
+			router.Register(llm.WorkloadEmbed, p)
+		}
+	}
+
+	harness := pty.NewHarness(0)
+	return agent.New(harness, router, store), nil
+}
+
+// agentAdapter wraps *agent.Agent to satisfy tui.AgentRunner,
+// translating between the two option/result types.
+type agentAdapter struct{ a *agent.Agent }
+
+func (ad agentAdapter) Run(ctx context.Context, args []string, opts tui.AgentRunOptions) (*tui.AgentResult, error) {
+	agentOpts := agent.RunOptions{
+		DryRun:          opts.DryRun,
+		SkipPermissions: opts.SkipPermissions,
+		ApprovalFn:      opts.ApprovalFn,
+	}
+	r, err := ad.a.Run(ctx, args, agentOpts)
+	if err != nil {
+		return nil, err
+	}
+	return &tui.AgentResult{
+		Command:   r.Command,
+		ExitCode:  r.ExitCode,
+		Healed:    r.Healed,
+		HealApply: r.HealApply,
+	}, nil
+}
+
 func runInteractive() error {
-	// TODO: launch bubbletea TUI in interactive REPL mode
-	fmt.Println("Starting Nebula interactive session... (TUI coming soon)")
-	return nil
+	a, err := buildAgent()
+	if err != nil {
+		return fmt.Errorf("init agent: %w", err)
+	}
+
+	m := tui.New(agentAdapter{a}, dryRun)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err = p.Run()
+	return err
 }
 
 func runCommand(args []string) error {
-	// TODO: run a one-shot command through the agent + PTY harness
-	fmt.Printf("Running command through Nebula: %v\n", args)
-	return nil
+	a, err := buildAgent()
+	if err != nil {
+		return fmt.Errorf("init agent: %w", err)
+	}
+
+	skipPerms, _ := rootCmd.PersistentFlags().GetBool("dangerously-skip-permissions")
+	opts := agent.RunOptions{
+		DryRun:          dryRun,
+		SkipPermissions: skipPerms,
+		ApprovalFn: func(cmd string, _ safety.Risk) bool {
+			fmt.Fprintf(os.Stderr, "nebula: approve running %q? [y/N] ", cmd)
+			var resp string
+			fmt.Scanln(&resp)
+			return resp == "y" || resp == "Y"
+		},
+	}
+	_, err = a.Run(context.Background(), args, opts)
+	return err
 }

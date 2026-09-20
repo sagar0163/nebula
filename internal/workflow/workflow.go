@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sagar0163/nebula/internal/agent"
+	"github.com/sagar0163/nebula/internal/memory"
+	"github.com/sagar0163/nebula/internal/models"
 	"github.com/sagar0163/nebula/internal/skills"
 )
 
@@ -86,6 +89,66 @@ func renderPrompt(promptTmpl string, inputs, outputs map[string]string) (string,
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", err
+	func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store memory.Store, inputs map[string]string) (string, error) {
+	inputsBytes, _ := json.Marshal(inputs)
+	if inputs == nil {
+		inputsBytes = []byte("{}")
 	}
+
+	job := &models.WorkflowJob{
+		WorkflowFile: wf.Name,
+		Inputs:       string(inputsBytes),
+		Status:       "running",
+	}
+
+	if err := store.SaveWorkflowJob(ctx, job); err != nil {
+		return "", fmt.Errorf("save job: %w", err)
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		outputs := make(map[string]string)
+
+		for _, step := range wf.Steps {
+			job.CurrentStep = step.Name
+			_ = store.UpdateWorkflowJob(bgCtx, job)
+
+			prompt, err := renderPrompt(step.Prompt, inputs, outputs)
+			if err != nil {
+				job.Status = "failed"
+				job.Error = fmt.Sprintf("step %q: render prompt: %v", step.Name, err)
+				_ = store.UpdateWorkflowJob(bgCtx, job)
+				return
+			}
+
+			if step.Skill != "" {
+				sk, err := skills.Load(step.Skill)
+				if err == nil && sk.Instructions != "" {
+					prompt = sk.Instructions + "\n\n" + prompt
+				}
+			}
+
+			out, err := a.Ask(bgCtx, prompt)
+			if err != nil {
+				job.Status = "failed"
+				job.Error = fmt.Sprintf("step %q: %v", step.Name, err)
+				_ = store.UpdateWorkflowJob(bgCtx, job)
+				return
+			}
+			outputs[step.Name] = out
+
+			outBytes, _ := json.Marshal(outputs)
+			job.Output = string(outBytes)
+			_ = store.UpdateWorkflowJob(bgCtx, job)
+		}
+
+		job.Status = "done"
+		job.CurrentStep = ""
+		_ = store.UpdateWorkflowJob(bgCtx, job)
+	}()
+
+	return job.ID, nil
+}
+
 	return buf.String(), nil
 }

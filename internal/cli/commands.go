@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -190,35 +191,108 @@ func newWorkflowCmd() *cobra.Command {
 		Use:   "workflow",
 		Short: "Run multi-step AI workflows",
 	}
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:   "run <file> [key=value...]",
-			Short: "Run a workflow YAML file",
-			Args:  cobra.MinimumNArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				wf, err := workflow.LoadFile(args[0])
+
+	runCmd := &cobra.Command{
+		Use:   "run <file> [key=value...]",
+		Short: "Run a workflow YAML file",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			bg, _ := cmd.Flags().GetBool("background")
+			wf, err := workflow.LoadFile(args[0])
+			if err != nil {
+				return err
+			}
+			inputs := map[string]string{}
+			for _, kv := range args[1:] {
+				parts := strings.SplitN(kv, "=", 2)
+				if len(parts) == 2 {
+					inputs[parts[0]] = parts[1]
+				}
+			}
+			a, err := buildAgent()
+			if err != nil {
+				return fmt.Errorf("init agent: %w", err)
+			}
+
+			if bg {
+				store, err := openStore()
 				if err != nil {
 					return err
 				}
-				inputs := map[string]string{}
-				for _, kv := range args[1:] {
-					parts := strings.SplitN(kv, "=", 2)
-					if len(parts) == 2 {
-						inputs[parts[0]] = parts[1]
-					}
-				}
-				a, err := buildAgent()
+				defer store.Close()
+
+				id, err := wf.RunBackground(context.Background(), a, store, inputs)
 				if err != nil {
-					return fmt.Errorf("init agent: %w", err)
+					return err
 				}
-				outputs, err := wf.Run(context.Background(), a, inputs)
-				for stepName, out := range outputs {
-					fmt.Printf("\n=== Step: %s ===\n%s\n", stepName, out)
-				}
-				return err
-			},
+				fmt.Printf("Job started: %s\n", id)
+				return nil
+			}
+
+			outputs, err := wf.Run(context.Background(), a, inputs)
+			for stepName, out := range outputs {
+				fmt.Printf("\n=== Step: %s ===\n%s\n", stepName, out)
+			}
+			return err
 		},
-	)
+	}
+	runCmd.Flags().Bool("background", false, "Run workflow in the background")
+
+	statusCmd := &cobra.Command{
+		Use:   "status <job-id>",
+		Short: "Check the status of a background workflow",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			job, err := store.GetWorkflowJob(context.Background(), args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("status: %s\ncurrent_step: %s\ncreated_at: %s\n", job.Status, job.CurrentStep, job.CreatedAt.Format("2006-01-02 15:04:05"))
+			return nil
+		},
+	}
+
+	resultCmd := &cobra.Command{
+		Use:   "result <job-id>",
+		Short: "View the results of a background workflow",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			job, err := store.GetWorkflowJob(context.Background(), args[0])
+			if err != nil {
+				return err
+			}
+
+			var outputs map[string]string
+			if job.Output != "" && job.Output != "{}" {
+				if err := json.Unmarshal([]byte(job.Output), &outputs); err != nil {
+					return fmt.Errorf("parse output: %w", err)
+				}
+			}
+
+			for stepName, out := range outputs {
+				fmt.Printf("\n=== Step: %s ===\n%s\n", stepName, out)
+			}
+			if job.Error != "" {
+				fmt.Printf("\n=== Error ===\n%s\n", job.Error)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.AddCommand(runCmd, statusCmd, resultCmd)
 	return cmd
 }
 

@@ -440,3 +440,74 @@ func globMatch(pattern, s string) bool {
 	ok, err := filepath.Match(pattern, s)
 	return err == nil && ok
 }
+
+// SaveWorkflowJob inserts a new workflow job.
+func (s *SQLiteStore) SaveWorkflowJob(ctx context.Context, j *models.WorkflowJob) error {
+	if j == nil {
+		return errors.New("memory: nil workflow job")
+	}
+	if j.ID == "" {
+		j.ID = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	if j.CreatedAt.IsZero() {
+		j.CreatedAt = now
+	}
+	if j.UpdatedAt.IsZero() {
+		j.UpdatedAt = now
+	}
+
+	const q = `INSERT INTO workflow_jobs (id, workflow_file, inputs, status, current_step, output, error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	if _, err := s.db.ExecContext(ctx, q,
+		j.ID, j.WorkflowFile, j.Inputs, j.Status, j.CurrentStep, j.Output, j.Error, j.CreatedAt, j.UpdatedAt,
+	); err != nil {
+		return fmt.Errorf("save workflow job: %w", err)
+	}
+	return nil
+}
+
+// GetWorkflowJob returns the workflow job with the given ID.
+func (s *SQLiteStore) GetWorkflowJob(ctx context.Context, id string) (*models.WorkflowJob, error) {
+	var j models.WorkflowJob
+	err := s.db.GetContext(ctx, &j,
+		`SELECT id, workflow_file, inputs, status, current_step, output, error, created_at, updated_at FROM workflow_jobs WHERE id = ?`, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, fmt.Errorf("get workflow job %q: %w", id, err)
+	}
+	return &j, nil
+}
+
+// UpdateWorkflowJob updates the workflow job's status, current_step, output, error, and updated_at.
+func (s *SQLiteStore) UpdateWorkflowJob(ctx context.Context, j *models.WorkflowJob) error {
+	if j == nil {
+		return errors.New("memory: nil workflow job")
+	}
+	j.UpdatedAt = time.Now().UTC()
+
+	const q = `UPDATE workflow_jobs SET status = ?, current_step = ?, output = ?, error = ?, updated_at = ? WHERE id = ?`
+	if _, err := s.db.ExecContext(ctx, q, j.Status, j.CurrentStep, j.Output, j.Error, j.UpdatedAt, j.ID); err != nil {
+		return fmt.Errorf("update workflow job %q: %w", j.ID, err)
+	}
+	return nil
+}
+
+// ListWorkflowJobs returns workflow jobs, most recently created first.
+func (s *SQLiteStore) ListWorkflowJobs(ctx context.Context, limit int) ([]*models.WorkflowJob, error) {
+	q := `SELECT id, workflow_file, inputs, status, current_step, output, error, created_at, updated_at FROM workflow_jobs ORDER BY created_at DESC`
+	var args []any
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	jobs := []*models.WorkflowJob{}
+	if err := s.db.SelectContext(ctx, &jobs, q, args...); err != nil {
+		return nil, fmt.Errorf("list workflow jobs: %w", err)
+	}
+	return jobs, nil
+}

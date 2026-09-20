@@ -73,3 +73,15 @@ const (
 	ApprovalEdit
 	ApprovalExplain
 )
+
+type WorkflowJob struct {
+	ID           string    `db:"id"`
+	WorkflowFile string    `db:"workflow_file"`
+	Inputs       string    `db:"inputs"` // JSON-encoded map[string]string
+	Status       string    `db:"status"` // "running", "done", "failed"
+	CurrentStep  string    `db:"current_step"`
+	Output       string    `db:"output"` // JSON-encoded map[string]string step outputs
+	Error        string    `db:"error"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
+}

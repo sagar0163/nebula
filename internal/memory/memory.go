@@ -31,6 +31,12 @@ type Store interface {
 	SaveTask(ctx context.Context, t *models.Task) error
 	ListTasks(ctx context.Context, sessionID string, limit int) ([]*models.Task, error)
 
+	// Workflow Jobs
+	SaveWorkflowJob(ctx context.Context, j *models.WorkflowJob) error
+	GetWorkflowJob(ctx context.Context, id string) (*models.WorkflowJob, error)
+	UpdateWorkflowJob(ctx context.Context, j *models.WorkflowJob) error
+	ListWorkflowJobs(ctx context.Context, limit int) ([]*models.WorkflowJob, error)
+
 	Close() error
 }
 

@@ -14,6 +14,8 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/sagar0163/nebula/internal/memory"
+	"github.com/sagar0163/nebula/internal/skills"
+	"github.com/sagar0163/nebula/internal/workflow"
 )
 
 var knownProviders = []string{"groq", "gemini", "mistral", "nvidia"}
@@ -139,6 +141,84 @@ func newKeyCmd() *cobra.Command {
 		},
 	)
 
+	return cmd
+}
+
+func newSkillCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "skill",
+		Short: "Manage and inspect Nebula skills",
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List all available skills",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				list, err := skills.List()
+				if err != nil {
+					return err
+				}
+				if len(list) == 0 {
+					fmt.Println("No skills found. Add .md files to ~/.config/nebula/skills/")
+					return nil
+				}
+				for _, s := range list {
+					fmt.Printf("  %-20s  %s\n", s.Name, s.Description)
+				}
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "show <name>",
+			Short: "Print a skill's instructions",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				s, err := skills.Load(args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Printf("# %s\n%s\n\n%s\n", s.Name, s.Description, s.Instructions)
+				return nil
+			},
+		},
+	)
+	return cmd
+}
+
+func newWorkflowCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "workflow",
+		Short: "Run multi-step AI workflows",
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "run <file> [key=value...]",
+			Short: "Run a workflow YAML file",
+			Args:  cobra.MinimumNArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				wf, err := workflow.LoadFile(args[0])
+				if err != nil {
+					return err
+				}
+				inputs := map[string]string{}
+				for _, kv := range args[1:] {
+					parts := strings.SplitN(kv, "=", 2)
+					if len(parts) == 2 {
+						inputs[parts[0]] = parts[1]
+					}
+				}
+				a, err := buildAgent()
+				if err != nil {
+					return fmt.Errorf("init agent: %w", err)
+				}
+				outputs, err := wf.Run(context.Background(), a, inputs)
+				for stepName, out := range outputs {
+					fmt.Printf("\n=== Step: %s ===\n%s\n", stepName, out)
+				}
+				return err
+			},
+		},
+	)
 	return cmd
 }
 

@@ -62,6 +62,8 @@ func init() {
 		newRunCmd(),
 		newAskCmd(),
 		newKeyCmd(),
+		newSkillCmd(),
+		newWorkflowCmd(),
 		newVersionCmd(),
 	)
 }

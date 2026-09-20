@@ -53,6 +53,16 @@ type HealSuggestion struct {
 	Confidence  float64
 }
 
+// Task is a general-purpose agent interaction (any domain: code, writing, research, etc.).
+type Task struct {
+	ID        string    `db:"id"`
+	SessionID string    `db:"session_id"`
+	Input     string    `db:"input"`
+	Response  string    `db:"response"`
+	Domain    string    `db:"domain"` // "terminal", "code", "writing", "research", "general"
+	CreatedAt time.Time `db:"created_at"`
+}
+
 // Approval is a user's decision on a HealSuggestion.
 type Approval int
 

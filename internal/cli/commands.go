@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -113,6 +114,17 @@ func newRunCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCommand(args)
+		},
+	}
+}
+
+func newAskCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "ask [prompt...]",
+		Short: "Ask Nebula anything — code, writing, research, general tasks",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAsk(strings.Join(args, " "))
 		},
 	}
 }

@@ -118,6 +118,50 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 	return result, nil
 }
 
+// Ask handles a general-purpose request in any domain, streaming the LLM
+// response and returning the full string. The task is saved to memory.
+func (a *Agent) Ask(ctx context.Context, input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("empty input")
+	}
+
+	domain := detectDomain(input)
+
+	workload := llm.WorkloadHeal
+	switch domain {
+	case "research":
+		workload = llm.WorkloadLearn // stronger tier for long/research answers
+	}
+
+	req := llm.Request{
+		SystemPrompt: systemPromptFor(domain),
+		Messages:     []llm.Message{{Role: "user", Content: input}},
+		MaxTokens:    2048,
+		Temperature:  0.7,
+	}
+
+	tokens, err := a.router.Complete(ctx, workload, req)
+	if err != nil {
+		return "", err
+	}
+
+	var response string
+	for t := range tokens {
+		if t.Err != nil {
+			return "", t.Err
+		}
+		response += t.Text
+	}
+
+	_ = a.store.SaveTask(ctx, &models.Task{
+		Input:    input,
+		Response: response,
+		Domain:   domain,
+	})
+	return response, nil
+}
+
 // diagnose calls the LLM to analyze a failure and suggest a fix.
 func (a *Agent) diagnose(ctx context.Context, cmd, output string) (*models.HealSuggestion, error) {
 	prompt := buildDiagnosePrompt(cmd, output)
@@ -266,3 +310,80 @@ func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
 const systemPrompt = `You are Nebula, a self-healing terminal agent.
 Your job is to analyze failed shell commands and suggest precise fixes.
 Be concise. Only suggest commands that are safe and reversible where possible.`
+
+const codeSystemPrompt = `You are Nebula, an expert coding assistant. Help with code review, debugging, refactoring, and writing code in any language. Be precise and show working examples.`
+
+const writingSystemPrompt = `You are Nebula, a writing assistant. Help with drafting, editing, improving prose, novels, emails, and any written content. Adapt your tone to the user's style.`
+
+const researchSystemPrompt = `You are Nebula, a research assistant. Synthesize information, explain concepts, compare options, and provide well-structured answers with clear reasoning.`
+
+const generalSystemPrompt = `You are Nebula, a general-purpose AI assistant. Help with any task — coding, writing, analysis, planning, or conversation. Be helpful, concise, and accurate.`
+
+// systemPromptFor returns the system prompt matching the task domain,
+// falling back to the general-purpose prompt.
+func systemPromptFor(domain string) string {
+	switch domain {
+	case "terminal":
+		return systemPrompt
+	case "code":
+		return codeSystemPrompt
+	case "writing":
+		return writingSystemPrompt
+	case "research":
+		return researchSystemPrompt
+	default:
+		return generalSystemPrompt
+	}
+}
+
+// detectDomain classifies an input into a task domain by keyword heuristics.
+func detectDomain(input string) string {
+	lower := strings.ToLower(input)
+	switch {
+	case containsAny(lower, terminalKeywords...):
+		return "terminal"
+	case containsAny(lower, codeKeywords...):
+		return "code"
+	case containsAny(lower, writingKeywords...):
+		return "writing"
+	case containsAny(lower, researchKeywords...):
+		return "research"
+	default:
+		return "general"
+	}
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+var terminalKeywords = []string{
+	"shell", "terminal", "command", "bash", "zsh", "install", "apt", "brew",
+	"docker", "kubectl", "grep", "sed", "awk", "chmod", "sudo", "curl",
+	"wget", "package manager", "alias", "command line", "cron", "ftp", "ssh ",
+}
+
+var codeKeywords = []string{
+	"code", "function", "class ", "bug", "debug", "refactor", "refactoring",
+	"variable", "api", "endpoint", "compiler", "compile", "exception",
+	"stack trace", "unit test", "pull request", "python", "javascript",
+	"typescript", "golang", "rust", "react", "vue", "node",
+	"sql", "json", "yaml", "regex",
+}
+
+var writingKeywords = []string{
+	"write", "draft", "edit", "rewrite", "essay", "email", "blog", "novel",
+	"prose", "story", "article", "poem", "poetry", "resume", "cover letter",
+	"headline", "copywriting",
+}
+
+var researchKeywords = []string{
+	"research", "explain", "compare", "summarize", "summary", "analysis",
+	"investigate", "difference between", "literature", "paper on", "study",
+	"overview of", "breakdown of",
+}

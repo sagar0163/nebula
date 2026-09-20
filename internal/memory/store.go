@@ -373,6 +373,51 @@ func (s *SQLiteStore) FindPermission(ctx context.Context, cmdPattern string) (*m
 	return &matches[0], nil
 }
 
+// SaveTask persists a general-purpose task and its response.
+func (s *SQLiteStore) SaveTask(ctx context.Context, t *models.Task) error {
+	if t == nil {
+		return errors.New("memory: nil task")
+	}
+	if strings.TrimSpace(t.ID) == "" {
+		t.ID = uuid.NewString()
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now().UTC()
+	}
+
+	const q = `INSERT INTO tasks (id, session_id, input, response, domain, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`
+
+	if _, err := s.db.ExecContext(ctx, q,
+		t.ID, t.SessionID, t.Input, t.Response, t.Domain, t.CreatedAt,
+	); err != nil {
+		return fmt.Errorf("save task: %w", err)
+	}
+	return nil
+}
+
+// ListTasks returns tasks for a session (or all sessions when sessionID is
+// empty), most recent first. A limit <= 0 returns no limit.
+func (s *SQLiteStore) ListTasks(ctx context.Context, sessionID string, limit int) ([]*models.Task, error) {
+	q := `SELECT id, session_id, input, response, domain, created_at FROM tasks`
+	args := []any{}
+	if sessionID != "" {
+		q += ` WHERE session_id = ?`
+		args = append(args, sessionID)
+	}
+	q += ` ORDER BY created_at DESC, rowid DESC`
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	tasks := []*models.Task{}
+	if err := s.db.SelectContext(ctx, &tasks, q, args...); err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	return tasks, nil
+}
+
 // Close releases the underlying database connection.
 func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {

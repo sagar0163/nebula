@@ -27,6 +27,10 @@ type Store interface {
 	SavePermission(ctx context.Context, p *models.Permission) error
 	FindPermission(ctx context.Context, cmdPattern string) (*models.Permission, error)
 
+	// General tasks
+	SaveTask(ctx context.Context, t *models.Task) error
+	ListTasks(ctx context.Context, sessionID string, limit int) ([]*models.Task, error)
+
 	Close() error
 }
 

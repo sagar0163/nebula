@@ -59,6 +59,7 @@ func init() {
 		newSetupCmd(),
 		newSessionCmd(),
 		newRunCmd(),
+		newAskCmd(),
 		newVersionCmd(),
 	)
 }
@@ -268,4 +269,20 @@ func runCommand(args []string) error {
 	}
 	_, err = a.Run(context.Background(), args, opts)
 	return err
+}
+
+// runAsk sends a general-purpose prompt to the agent and prints the response.
+func runAsk(input string) error {
+	a, err := buildAgent()
+	if err != nil {
+		return fmt.Errorf("init agent: %w", err)
+	}
+
+	response, err := a.Ask(context.Background(), input)
+	if err != nil {
+		return fmt.Errorf("ask: %w", err)
+	}
+
+	fmt.Println(response)
+	return nil
 }

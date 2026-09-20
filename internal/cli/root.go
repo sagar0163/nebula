@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -86,6 +87,29 @@ func initConfig() {
 	}
 }
 
+// loadKeys returns all API keys for a provider: config-file value first,
+// then keyring entries named baseKey, baseKey_2 … baseKey_9.
+func loadKeys(baseKey, configVal string) []string {
+	seen := map[string]bool{}
+	var keys []string
+	add := func(k string) {
+		if k != "" && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	add(configVal)
+	if k, _ := keyring.Get("nebula", baseKey); k != "" {
+		add(k)
+	}
+	for i := 2; i <= 9; i++ {
+		if k, _ := keyring.Get("nebula", baseKey+"_"+strconv.Itoa(i)); k != "" {
+			add(k)
+		}
+	}
+	return keys
+}
+
 // buildAgent constructs the agent from viper config.
 func buildAgent() (*agent.Agent, error) {
 	// Memory store.
@@ -105,37 +129,27 @@ func buildAgent() (*agent.Agent, error) {
 	// LLM router.
 	router := llm.NewRouter()
 
-	groqKey := viper.GetString("llm.groq.api_key")
-	if groqKey == "" {
-		groqKey, _ = keyring.Get("nebula", "groq_api_key")
-	}
-	if groqKey != "" {
-		p := providers.NewGroq(providers.GroqConfig{
-			APIKey:        groqKey,
+	for _, k := range loadKeys("groq_api_key", viper.GetString("llm.groq.api_key")) {
+		if p := providers.NewGroq(providers.GroqConfig{
+			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.groq.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.groq.model_heal"),
 			ModelLearn:    viper.GetString("llm.groq.model_learn"),
-		})
-		if p != nil {
+		}); p != nil {
 			router.Register(llm.WorkloadDiagnose, p)
 			router.Register(llm.WorkloadHeal, p)
 			router.Register(llm.WorkloadLearn, p)
 		}
 	}
 
-	geminiKey := viper.GetString("llm.gemini.api_key")
-	if geminiKey == "" {
-		geminiKey, _ = keyring.Get("nebula", "gemini_api_key")
-	}
-	if geminiKey != "" {
-		p := providers.NewGemini(providers.GeminiConfig{
-			APIKey:        geminiKey,
+	for _, k := range loadKeys("gemini_api_key", viper.GetString("llm.gemini.api_key")) {
+		if p := providers.NewGemini(providers.GeminiConfig{
+			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.gemini.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.gemini.model_heal"),
 			ModelLearn:    viper.GetString("llm.gemini.model_learn"),
 			ModelEmbed:    viper.GetString("llm.gemini.model_embed"),
-		})
-		if p != nil {
+		}); p != nil {
 			router.Register(llm.WorkloadDiagnose, p)
 			router.Register(llm.WorkloadHeal, p)
 			router.Register(llm.WorkloadLearn, p)
@@ -159,19 +173,14 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	mistralKey := viper.GetString("llm.mistral.api_key")
-	if mistralKey == "" {
-		mistralKey, _ = keyring.Get("nebula", "mistral_api_key")
-	}
-	if mistralKey != "" {
-		p := providers.NewMistral(providers.MistralConfig{
-			APIKey:        mistralKey,
+	for _, k := range loadKeys("mistral_api_key", viper.GetString("llm.mistral.api_key")) {
+		if p := providers.NewMistral(providers.MistralConfig{
+			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.mistral.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.mistral.model_heal"),
 			ModelLearn:    viper.GetString("llm.mistral.model_learn"),
 			ModelEmbed:    viper.GetString("llm.mistral.model_embed"),
-		})
-		if p != nil {
+		}); p != nil {
 			router.Register(llm.WorkloadDiagnose, p)
 			router.Register(llm.WorkloadHeal, p)
 			router.Register(llm.WorkloadLearn, p)
@@ -179,20 +188,15 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	nvidiaKey := viper.GetString("llm.nvidia.api_key")
-	if nvidiaKey == "" {
-		nvidiaKey, _ = keyring.Get("nebula", "nvidia_api_key")
-	}
-	if nvidiaKey != "" {
-		p := providers.NewNvidia(providers.NvidiaConfig{
-			APIKey:        nvidiaKey,
+	for _, k := range loadKeys("nvidia_api_key", viper.GetString("llm.nvidia.api_key")) {
+		if p := providers.NewNvidia(providers.NvidiaConfig{
+			APIKey:        k,
 			BaseURL:       viper.GetString("llm.nvidia.base_url"),
 			ModelDiagnose: viper.GetString("llm.nvidia.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.nvidia.model_heal"),
 			ModelLearn:    viper.GetString("llm.nvidia.model_learn"),
 			ModelEmbed:    viper.GetString("llm.nvidia.model_embed"),
-		})
-		if p != nil {
+		}); p != nil {
 			router.Register(llm.WorkloadDiagnose, p)
 			router.Register(llm.WorkloadHeal, p)
 			router.Register(llm.WorkloadLearn, p)

@@ -61,6 +61,7 @@ func init() {
 		newSessionCmd(),
 		newRunCmd(),
 		newAskCmd(),
+		newKeyCmd(),
 		newVersionCmd(),
 	)
 }

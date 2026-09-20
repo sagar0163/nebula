@@ -6,13 +6,141 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/zalando/go-keyring"
 
 	"github.com/sagar0163/nebula/internal/memory"
 )
+
+var knownProviders = []string{"groq", "gemini", "mistral", "nvidia"}
+
+func slotName(provider string, slot int) string {
+	base := provider + "_api_key"
+	if slot == 1 {
+		return base
+	}
+	return base + "_" + strconv.Itoa(slot)
+}
+
+func nextFreeSlot(provider string) int {
+	for i := 1; i <= 9; i++ {
+		v, _ := keyring.Get("nebula", slotName(provider, i))
+		if v == "" {
+			return i
+		}
+	}
+	return 0
+}
+
+func maskKey(k string) string {
+	if len(k) >= 12 {
+		return k[:4] + "..." + k[len(k)-4:]
+	}
+	if len(k) > 4 {
+		return k[:4] + "..."
+	}
+	return "****"
+}
+
+func isKnownProvider(p string) bool {
+	for _, known := range knownProviders {
+		if known == p {
+			return true
+		}
+	}
+	return false
+}
+
+func newKeyCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "key",
+		Short: "Manage API keys stored in the OS keyring",
+	}
+
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List all stored API keys (masked)",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				fmt.Printf("  %-10s  %-6s  %s\n", "PROVIDER", "SLOT", "KEY")
+				fmt.Printf("  %-10s  %-6s  %s\n", "--------", "----", "---")
+				for _, p := range knownProviders {
+					printed := false
+					for i := 1; i <= 9; i++ {
+						v, _ := keyring.Get("nebula", slotName(p, i))
+						if v != "" {
+							label := ""
+							if i == 1 {
+								label = " (primary)"
+							}
+							fmt.Printf("  %-10s  slot %-2d  %s%s\n", p, i, maskKey(v), label)
+							printed = true
+						}
+					}
+					if !printed {
+						fmt.Printf("  %-10s  slot 1   (not set)\n", p)
+					}
+				}
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "add <provider> <key>",
+			Short: "Add an API key for a provider (auto-selects next free slot)",
+			Args:  cobra.ExactArgs(2),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				provider, key := args[0], args[1]
+				if !isKnownProvider(provider) {
+					return fmt.Errorf("unknown provider %q — choose from: %s", provider, strings.Join(knownProviders, ", "))
+				}
+				if key == "" {
+					return fmt.Errorf("key cannot be empty")
+				}
+				slot := nextFreeSlot(provider)
+				if slot == 0 {
+					return fmt.Errorf("all 9 slots for %s are full — remove one first with: nebula key remove %s <slot>", provider, provider)
+				}
+				name := slotName(provider, slot)
+				if err := keyring.Set("nebula", name, key); err != nil {
+					return fmt.Errorf("store key in keyring: %w", err)
+				}
+				fmt.Printf("Added %s key to slot %d (%s)\n", provider, slot, name)
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "remove <provider> <slot>",
+			Short: "Remove a stored API key by slot number (1-9)",
+			Args:  cobra.ExactArgs(2),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				provider := args[0]
+				if !isKnownProvider(provider) {
+					return fmt.Errorf("unknown provider %q — choose from: %s", provider, strings.Join(knownProviders, ", "))
+				}
+				slot, err := strconv.Atoi(args[1])
+				if err != nil || slot < 1 || slot > 9 {
+					return fmt.Errorf("slot must be a number between 1 and 9")
+				}
+				name := slotName(provider, slot)
+				existing, _ := keyring.Get("nebula", name)
+				if existing == "" {
+					return fmt.Errorf("no key in slot %d for %s", slot, provider)
+				}
+				if err := keyring.Delete("nebula", name); err != nil {
+					return fmt.Errorf("remove key from keyring: %w", err)
+				}
+				fmt.Printf("Removed %s key from slot %d (%s)\n", provider, slot, name)
+				return nil
+			},
+		},
+	)
+
+	return cmd
+}
 
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{

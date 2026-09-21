@@ -89,7 +89,12 @@ func renderPrompt(promptTmpl string, inputs, outputs map[string]string) (string,
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", err
-	func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store memory.Store, inputs map[string]string) (string, error) {
+	}
+	return buf.String(), nil
+}
+
+// RunBackground executes the workflow in the background.
+func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store memory.Store, inputs map[string]string) (string, error) {
 	inputsBytes, _ := json.Marshal(inputs)
 	if inputs == nil {
 		inputsBytes = []byte("{}")
@@ -148,7 +153,4 @@ func renderPrompt(promptTmpl string, inputs, outputs map[string]string) (string,
 	}()
 
 	return job.ID, nil
-}
-
-	return buf.String(), nil
 }

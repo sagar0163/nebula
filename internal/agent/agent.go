@@ -1,10 +1,8 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/gob"
 	"fmt"
 	"strings"
 	"sync"
@@ -25,6 +23,9 @@ type Agent struct {
 
 	doomMu         sync.Mutex
 	doomLoopCounts map[string]int
+
+	planner  *Planner
+	executor *Executor
 }
 
 // New creates an Agent wired up with the given dependencies.
@@ -34,6 +35,8 @@ func New(harness *pty.Harness, router *llm.Router, store memory.Store) *Agent {
 		router:         router,
 		store:          store,
 		doomLoopCounts: make(map[string]int),
+		planner:        NewPlanner(router, store),
+		executor:       NewExecutor(harness, router, store),
 	}
 }
 
@@ -104,33 +107,21 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 			return result, fmt.Errorf("healing loop detected after 3 attempts — manual intervention required")
 		}
 
-		// Try recalling a similar past fix before calling the LLM.
-		if recalled, err := a.recallPattern(ctx, raw, string(cmdResult.Stdout)); err == nil && recalled != nil {
-			// Use the recalled fix — still ask for approval.
-			if opts.ApprovalFn(recalled.FixCmd, safety.RiskMedium) {
-				result.Healed = true
-				result.HealApply = recalled
-				fixResult, err := a.harness.Run(ctx, "sh", []string{"-c", recalled.FixCmd})
-				if err == nil && fixResult.ExitCode == 0 {
-					_ = a.learnPattern(ctx, raw, string(cmdResult.Stdout), recalled.FixCmd)
-				}
-				return result, nil
-			}
-		}
-
-		suggestion, err := a.diagnose(ctx, raw, string(cmdResult.Stdout))
+		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout))
 		if err != nil {
 			return result, nil // best-effort: return without healing
 		}
 
-		if suggestion != nil && opts.ApprovalFn(suggestion.FixCmd, safety.RiskMedium) {
-			result.Healed = true
-			result.HealApply = suggestion
-
-			fixResult, err := a.harness.Run(ctx, "sh", []string{"-c", suggestion.FixCmd})
-			if err == nil && fixResult.ExitCode == 0 {
-				// 6. Learn the successful fix pattern.
-				_ = a.learnPattern(ctx, raw, string(cmdResult.Stdout), suggestion.FixCmd)
+		if suggestion != nil {
+			approved := false
+			wrapperFn := func(cmd string, risk safety.Risk) bool {
+				approved = opts.ApprovalFn(cmd, risk)
+				return approved
+			}
+			err := a.executor.Execute(ctx, suggestion, string(cmdResult.Stdout), wrapperFn)
+			if err == nil && approved {
+				result.Healed = true
+				result.HealApply = suggestion
 			}
 		}
 	}
@@ -182,99 +173,6 @@ func (a *Agent) Ask(ctx context.Context, input string) (string, error) {
 	return response, nil
 }
 
-// diagnose calls the LLM to analyze a failure and suggest a fix.
-func (a *Agent) diagnose(ctx context.Context, cmd, output string) (*models.HealSuggestion, error) {
-	prompt := buildDiagnosePrompt(cmd, output)
-	req := llm.Request{
-		SystemPrompt: systemPrompt,
-		Messages:     []llm.Message{{Role: "user", Content: prompt}},
-		MaxTokens:    512,
-		Temperature:  0.1,
-	}
-
-	tokens, err := a.router.Complete(ctx, llm.WorkloadDiagnose, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var response string
-	for t := range tokens {
-		if t.Err != nil {
-			return nil, t.Err
-		}
-		response += t.Text
-	}
-
-	return parseSuggestion(cmd, response), nil
-}
-
-func (a *Agent) learnPattern(ctx context.Context, failCmd, failOutput, fixCmd string) error {
-	embedding, err := encodeEmbeddingText(ctx, a.router, failCmd, failOutput)
-	if err != nil {
-		// Best-effort: embedding failure shouldn't block the heal flow.
-		return nil
-	}
-	return a.store.SavePattern(ctx, &models.Pattern{
-		FailCmd:     failCmd,
-		FailOutput:  failOutput,
-		FixCmd:      fixCmd,
-		SuccessRate: 1.0,
-		UseCount:    1,
-		Embedding:   embedding,
-	})
-}
-
-// recallPattern searches stored patterns for a similar past fix for the given
-// failure. Returns nil, nil if no match is found or embedding is unavailable.
-func (a *Agent) recallPattern(ctx context.Context, failCmd, failOutput string) (*models.HealSuggestion, error) {
-	embedding, err := embedText(ctx, a.router, failCmd, failOutput)
-	if err != nil {
-		return nil, nil
-	}
-
-	patterns, err := a.store.FindSimilarPatterns(ctx, embedding, 1)
-	if err != nil || len(patterns) == 0 {
-		return nil, nil
-	}
-
-	return &models.HealSuggestion{
-		OriginalCmd: failCmd,
-		FixCmd:      patterns[0].FixCmd,
-		Explanation: "recalled from similar past fix",
-	}, nil
-}
-
-// buildEmbeddingText concatenates the failed command and the first 500 chars
-// of its output to form the semantic context used for embedding.
-func buildEmbeddingText(failCmd, failOutput string) string {
-	text := failCmd + "\n"
-	if len(failOutput) > 500 {
-		return text + failOutput[:500]
-	}
-	return text + failOutput
-}
-
-// embedText embeds the failure context and returns the raw float32 vector.
-func embedText(ctx context.Context, router *llm.Router, failCmd, failOutput string) ([]float32, error) {
-	return router.Embed(ctx, buildEmbeddingText(failCmd, failOutput))
-}
-
-// encodeEmbeddingText embeds the failure context and returns the gob-encoded
-// bytes for persistence, matching gobDecodeFloats in the memory store.
-func encodeEmbeddingText(ctx context.Context, router *llm.Router, failCmd, failOutput string) ([]byte, error) {
-	vec, err := embedText(ctx, router, failCmd, failOutput)
-	if err != nil {
-		return nil, err
-	}
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(vec); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// RunOptions configures a single agent run.
 type RunOptions struct {
 	DryRun          bool
 	SkipPermissions bool
@@ -292,39 +190,6 @@ func joinArgs(args []string) string {
 		result += a
 	}
 	return result
-}
-
-func buildDiagnosePrompt(cmd, output string) string {
-	return fmt.Sprintf(`A shell command failed. Diagnose the error and suggest a fix.
-
-Command: %s
-
-Output:
-%s
-
-Respond with:
-FIX: <the exact fix command>
-EXPLANATION: <one sentence explaining what went wrong and why the fix works>`, cmd, output)
-}
-
-func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
-	var fix, explanation string
-	for _, line := range strings.Split(response, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "FIX:") {
-			fix = strings.TrimSpace(strings.TrimPrefix(line, "FIX:"))
-		} else if strings.HasPrefix(line, "EXPLANATION:") {
-			explanation = strings.TrimSpace(strings.TrimPrefix(line, "EXPLANATION:"))
-		}
-	}
-	if fix == "" {
-		return nil
-	}
-	return &models.HealSuggestion{
-		OriginalCmd: originalCmd,
-		FixCmd:      fix,
-		Explanation: explanation,
-	}
 }
 
 const systemPrompt = `You are Nebula, a self-healing terminal agent.

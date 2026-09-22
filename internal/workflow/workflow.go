@@ -78,7 +78,7 @@ func renderPrompt(promptTmpl string, inputs, outputs map[string]string) (string,
 	// Unescape literal \n sequences in YAML scalars.
 	promptTmpl = strings.ReplaceAll(promptTmpl, `\n`, "\n")
 
-	tmpl, err := template.New("prompt").Parse(promptTmpl)
+	tmpl, err := template.New("prompt").Option("missingkey=error").Parse(promptTmpl)
 	if err != nil {
 		return "", err
 	}

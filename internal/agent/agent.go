@@ -3,9 +3,11 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/gob"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
@@ -20,23 +22,28 @@ type Agent struct {
 	harness *pty.Harness
 	router  *llm.Router
 	store   memory.Store
+
+	doomMu         sync.Mutex
+	doomLoopCounts map[string]int
 }
 
 // New creates an Agent wired up with the given dependencies.
 func New(harness *pty.Harness, router *llm.Router, store memory.Store) *Agent {
 	return &Agent{
-		harness: harness,
-		router:  router,
-		store:   store,
+		harness:        harness,
+		router:         router,
+		store:          store,
+		doomLoopCounts: make(map[string]int),
 	}
 }
 
 // RunResult is the outcome of running a command through the agent.
 type RunResult struct {
-	Command    string
-	ExitCode   int
-	Healed     bool
-	HealApply  *models.HealSuggestion
+	Command       string
+	ExitCode      int
+	Healed        bool
+	HealApply     *models.HealSuggestion
+	DoomLoopCount int
 }
 
 // Run executes args through the PTY harness, healing on failure.
@@ -84,6 +91,19 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 
 	// 5. On failure, attempt healing.
 	if cmdResult.ExitCode != 0 {
+		outHash := sha256.Sum256(cmdResult.Stdout)
+		fingerprint := fmt.Sprintf("%s:%x", raw, outHash[:8])
+
+		a.doomMu.Lock()
+		count := a.doomLoopCounts[fingerprint]
+		a.doomLoopCounts[fingerprint] = count + 1
+		a.doomMu.Unlock()
+
+		result.DoomLoopCount = count + 1
+		if count >= 3 {
+			return result, fmt.Errorf("healing loop detected after 3 attempts — manual intervention required")
+		}
+
 		// Try recalling a similar past fix before calling the LLM.
 		if recalled, err := a.recallPattern(ctx, raw, string(cmdResult.Stdout)); err == nil && recalled != nil {
 			// Use the recalled fix — still ask for approval.

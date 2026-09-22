@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -182,6 +183,54 @@ func newSkillCmd() *cobra.Command {
 					return err
 				}
 				fmt.Printf("# %s\n%s\n\n%s\n", s.Name, s.Description, s.Instructions)
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "create <name>",
+			Short: "Create a new skill interactively",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				name := args[0]
+				reader := bufio.NewReader(os.Stdin)
+
+				fmt.Print("Description (single line): ")
+				desc, err := reader.ReadString('\n')
+				if err != nil {
+					return err
+				}
+				desc = strings.TrimSpace(desc)
+
+				fmt.Println("Instructions (multi-line, end with empty line or Ctrl+D):")
+				var instructions []string
+				scanner := bufio.NewScanner(os.Stdin)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if line == "" {
+						break
+					}
+					instructions = append(instructions, line)
+				}
+				if err := scanner.Err(); err != nil {
+					return err
+				}
+
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return err
+				}
+				skillPath := filepath.Join(home, ".config", "nebula", "skills", name+".md")
+
+				content := fmt.Sprintf("---\ndescription: %s\n---\n%s\n", desc, strings.Join(instructions, "\n"))
+				
+				if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+					return err
+				}
+
+				fmt.Printf("Skill saved to %s\n", skillPath)
 				return nil
 			},
 		},

@@ -344,7 +344,32 @@ func newWorkflowCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(runCmd, statusCmd, resultCmd)
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all past background workflow jobs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			jobs, err := store.ListWorkflowJobs(context.Background(), 20)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("%-36s  %-8s %-12s %s\n", "ID", "STATUS", "STEP", "STARTED")
+			fmt.Printf("%-36s  %-8s %-12s %s\n", "----", "------", "----", "-------")
+			for _, job := range jobs {
+				fmt.Printf("%-36s  %-8s %-12s %s\n", job.ID, job.Status, job.CurrentStep, job.CreatedAt.Format("2006-01-02 15:04"))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.AddCommand(runCmd, statusCmd, resultCmd, listCmd)
 	return cmd
 }
 

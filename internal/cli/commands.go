@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -17,6 +19,7 @@ import (
 	"github.com/sagar0163/nebula/internal/memory"
 	"github.com/sagar0163/nebula/internal/skills"
 	"github.com/sagar0163/nebula/internal/workflow"
+	"github.com/sagar0163/nebula/internal/daemon"
 )
 
 var knownProviders = []string{"groq", "gemini", "mistral", "nvidia"}
@@ -425,4 +428,36 @@ func openStore() (memory.Store, error) {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	return memory.New(dbPath)
+}
+
+func newWatchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "watch",
+		Short: "Run as a background daemon monitoring the queue for workflows",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := buildAgent()
+			if err != nil {
+				return fmt.Errorf("init agent: %w", err)
+			}
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			queueDir := filepath.Join(home, ".config", "nebula", "queue")
+			if err := os.MkdirAll(queueDir, 0o755); err != nil {
+				return err
+			}
+
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
+			return daemon.Watch(ctx, a, store, queueDir)
+		},
+	}
 }

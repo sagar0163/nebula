@@ -64,6 +64,7 @@ func init() {
 		newKeyCmd(),
 		newSkillCmd(),
 		newWorkflowCmd(),
+		newWatchCmd(),
 		newVersionCmd(),
 	)
 }

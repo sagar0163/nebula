@@ -62,9 +62,16 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 	// Tee PTY output: → user's terminal + ring buffer.
 	var capture bytes.Buffer
 	writer := io.MultiWriter(os.Stdout, &capture, h)
-	go func() { io.Copy(writer, ptmx) }() //nolint:errcheck
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		io.Copy(writer, ptmx) //nolint:errcheck
+	}()
 
 	err = cmd.Wait()
+	wg.Wait()
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

@@ -252,6 +252,23 @@ func (s *SQLiteStore) SavePattern(ctx context.Context, p *models.Pattern) error 
 	return nil
 }
 
+// FindPatternByCmd returns the most-used pattern whose fail_cmd exactly
+// matches failCmd, or (nil, nil) when no pattern matches.
+func (s *SQLiteStore) FindPatternByCmd(ctx context.Context, failCmd string) (*models.Pattern, error) {
+	var p models.Pattern
+	err := s.db.GetContext(ctx, &p,
+		`SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at
+			FROM patterns WHERE fail_cmd = ? ORDER BY use_count DESC LIMIT 1`, failCmd)
+	switch {
+	case err == nil:
+		return &p, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("find pattern by cmd %q: %w", failCmd, err)
+	}
+}
+
 // FindSimilarPatterns decodes every stored pattern embedding and returns the
 // top-K patterns whose embedding is most similar to the input, sorted by
 // score descending. Patterns with unreadable embeddings are skipped.

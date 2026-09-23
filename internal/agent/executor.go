@@ -48,17 +48,12 @@ func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestio
 }
 
 func (e *Executor) learnPattern(ctx context.Context, failCmd, failOutput, fixCmd string) error {
-	embedding, err := encodeEmbeddingText(ctx, e.router, failCmd, failOutput)
-	if err != nil {
-		// Best-effort: embedding failure shouldn't block the heal flow.
-		return nil
-	}
 	return e.store.SavePattern(ctx, &models.Pattern{
 		FailCmd:     failCmd,
 		FailOutput:  failOutput,
 		FixCmd:      fixCmd,
 		SuccessRate: 1.0,
 		UseCount:    1,
-		Embedding:   embedding,
+		Embedding:   nil,
 	})
 }

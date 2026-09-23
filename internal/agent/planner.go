@@ -1,9 +1,7 @@
 package agent
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"fmt"
 	"strings"
 
@@ -59,19 +57,14 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output string) (*models.Hea
 }
 
 func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string) (*models.HealSuggestion, error) {
-	embedding, err := embedText(ctx, p.router, failCmd, failOutput)
-	if err != nil {
-		return nil, nil
-	}
-
-	patterns, err := p.store.FindSimilarPatterns(ctx, embedding, 1)
-	if err != nil || len(patterns) == 0 {
+	pattern, err := p.store.FindPatternByCmd(ctx, failCmd)
+	if err != nil || pattern == nil {
 		return nil, nil
 	}
 
 	return &models.HealSuggestion{
 		OriginalCmd: failCmd,
-		FixCmd:      patterns[0].FixCmd,
+		FixCmd:      pattern.FixCmd,
 		Explanation: "recalled from similar past fix",
 	}, nil
 }
@@ -107,29 +100,4 @@ func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
 		FixCmd:      fix,
 		Explanation: explanation,
 	}
-}
-
-func buildEmbeddingText(failCmd, failOutput string) string {
-	text := failCmd + "\n"
-	if len(failOutput) > 500 {
-		return text + failOutput[:500]
-	}
-	return text + failOutput
-}
-
-func embedText(ctx context.Context, router *llm.Router, failCmd, failOutput string) ([]float32, error) {
-	return router.Embed(ctx, buildEmbeddingText(failCmd, failOutput))
-}
-
-func encodeEmbeddingText(ctx context.Context, router *llm.Router, failCmd, failOutput string) ([]byte, error) {
-	vec, err := embedText(ctx, router, failCmd, failOutput)
-	if err != nil {
-		return nil, err
-	}
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(vec); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }

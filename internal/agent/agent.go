@@ -131,7 +131,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 
 // Ask handles a general-purpose request in any domain, streaming the LLM
 // response and returning the full string. The task is saved to memory.
-func (a *Agent) Ask(ctx context.Context, input string) (string, error) {
+func (a *Agent) Ask(ctx context.Context, input string, stream bool) (string, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return "", fmt.Errorf("empty input")
@@ -163,6 +163,12 @@ func (a *Agent) Ask(ctx context.Context, input string) (string, error) {
 			return "", t.Err
 		}
 		response += t.Text
+		if stream {
+			fmt.Print(t.Text)
+		}
+	}
+	if stream {
+		fmt.Println()
 	}
 
 	_ = a.store.SaveTask(ctx, &models.Task{

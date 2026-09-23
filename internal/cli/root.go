@@ -286,11 +286,9 @@ func runAsk(input string) error {
 		return fmt.Errorf("init agent: %w", err)
 	}
 
-	response, err := a.Ask(context.Background(), input)
+	_, err = a.Ask(context.Background(), input, true)
 	if err != nil {
 		return fmt.Errorf("ask: %w", err)
 	}
-
-	fmt.Println(response)
 	return nil
 }

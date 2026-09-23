@@ -63,7 +63,7 @@ func (wf *Workflow) Run(ctx context.Context, a *agent.Agent, inputs map[string]s
 			}
 		}
 
-		out, err := a.Ask(ctx, prompt)
+		out, err := a.Ask(ctx, prompt, false)
 		if err != nil {
 			return outputs, fmt.Errorf("step %q: %w", step.Name, err)
 		}
@@ -133,7 +133,7 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 				}
 			}
 
-			out, err := a.Ask(bgCtx, prompt)
+			out, err := a.Ask(bgCtx, prompt, false)
 			if err != nil {
 				job.Status = "failed"
 				job.Error = fmt.Sprintf("step %q: %v", step.Name, err)

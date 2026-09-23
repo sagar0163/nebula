@@ -57,78 +57,50 @@ nebula setup                    first-run config wizard
 
 ## Open Tasks
 
-### TASK-001: Doom-loop prevention
-**Description:** When the same command fails with the same error 3 times in a row and the same fix is suggested each time without success, Nebula should stop auto-retrying and print a clear escalation message instead of looping forever.
+### TASK-006: Fix safety bypass in Executor
+**Description:** `Executor.Execute()` hardcodes `safety.RiskMedium` when calling `approvalFn`, bypassing the safety classifier entirely. An LLM-suggested fix like `rm -rf /` would be approved as medium-risk. It must call `safety.Classify()` on the fix command first.
 
 **Details:**
-- Fingerprint each (command, error-hash) pair — use `fmt.Sprintf("%s:%x", cmd, sha256(stderr)[:8])`
-- Track attempt count in memory (can be in-process map, doesn't need to persist)
-- After 3 failed fix attempts for the same fingerprint, set a `doomLoopBlocked` flag and return an error: `"healing loop detected after 3 attempts — manual intervention required"`
-- Add a `DoomLoopCount` field to `RunResult` so the caller can display it
+- File to change: `internal/agent/executor.go`
+- In `Execute()`, replace the hardcoded `safety.RiskMedium` with `safety.Classify(suggestion.FixCmd)`
+- Also note: the fix is run via `sh -c` which is in `dangerousVectors` in `safety.go` — change execution to split the fix command into args and run it directly via `harness.Run()` instead of wrapping in `sh -c`. Use `strings.Fields(suggestion.FixCmd)` to split. If the fix command is complex (pipes, redirects), reject it and return an error rather than silently allowing shell injection.
+- Add a test in `internal/agent/agent_test.go` covering a dangerous fix command being rejected
+
+---
+
+### TASK-007: Stream LLM output to terminal in `Ask()`
+**Description:** `agent.Ask()` collects all tokens silently then returns the full string. For long responses the user sees a blank terminal for 10-20 seconds. Stream tokens to stdout as they arrive, then also return the full string for callers that need it.
+
+**Details:**
+- File to change: `internal/agent/agent.go` — `Ask()` method
+- As tokens arrive in the `for t := range tokens` loop, write each `t.Text` to `os.Stdout` immediately (no buffering)
+- The method signature stays the same — still returns `(string, error)`; accumulate the full string in parallel with writing
+- Also change `internal/workflow/workflow.go` `Run()` and `RunBackground()` — those call `a.Ask()` and should NOT print to stdout (workflow steps are piped into each other). Add a `stream bool` field to `RunOptions` or add a separate `AskQuiet()` method that skips stdout. Workflow always uses the quiet path.
+- File to change: `internal/cli/commands.go` — the `nebula ask` handler already calls `Ask()` and prints the result; remove the final print since streaming will handle output
+
+---
+
+### TASK-008: Fix dead `recallPattern` / embedding path
+**Description:** `Planner.recallPattern()` calls `router.Embed()` but no provider implements `Embed()` — they all return an error, so the semantic memory feature silently does nothing. Either wire up a real embedding provider or remove the dead code path and replace with simpler exact-match recall.
+
+**Details:**
+- Check `internal/llm/providers/*.go` — none implement a working `Embed()` method
+- Option A (preferred, simpler): replace `recallPattern` with exact-string lookup — query `store.FindSimilarPatterns` by the raw `failCmd` string match instead of vector similarity. Remove the `Embedding` field usage from `models.Pattern` and the `encodeEmbeddingText`/`embedText` helpers in `planner.go`.
+- Option B: implement a real embedding call in one provider (e.g. Groq or Ollama support embeddings) and wire it through `router.Embed()`
+- Whichever option is chosen, add a test proving `recallPattern` actually returns a result on a second identical failure
+- Files to change: `internal/agent/planner.go`, possibly `internal/llm/providers/*.go`, `internal/memory/store.go`
+
+---
+
+### TASK-009: Fix `detectDomain()` ordering and false matches
+**Description:** `detectDomain()` checks `writingKeywords` before `codeKeywords`, so "write a node script" routes to the writing assistant instead of code. Also "write" is too broad — it matches every prompt that starts with "write me a…" regardless of subject.
+
+**Details:**
 - File to change: `internal/agent/agent.go`
-- No new dependencies needed
-
----
-
-### TASK-002: Proactive butler mode (background daemon)
-**Description:** Add a `nebula watch` command that runs as a background daemon, monitors a directory for new workflow YAML files dropped into `~/.config/nebula/queue/`, and runs them automatically.
-
-**Details:**
-- New command: `nebula watch` — polls `~/.config/nebula/queue/` every 10s
-- When a `.yaml` file appears, run it as a background workflow job (`wf.RunBackground()`), then move it to `~/.config/nebula/queue/done/`
-- Print a line when a job starts and when it finishes
-- Runs until Ctrl+C (handle SIGINT/SIGTERM cleanly)
-- Uses `fsnotify` if already in go.mod, otherwise use a simple polling loop
-- New file: `internal/daemon/watch.go`
-- Add `newWatchCmd()` to `internal/cli/commands.go` and register in `root.go`
-
----
-
-### TASK-003: Planner / Executor split
-**Description:** Formalize the separation between the LLM that plans a fix and the executor that runs it. Currently `diagnose()` and execution are in the same flow. Split them so the Planner only reads/searches and the Executor only runs pre-approved steps.
-
-**Details:**
-- Add a `Planner` struct in `internal/agent/planner.go` with method `Plan(ctx, failCmd, output string) (*models.HealSuggestion, error)` — wraps current `diagnose()` logic
-- Add an `Executor` struct in `internal/agent/executor.go` with method `Execute(ctx, suggestion *models.HealSuggestion, approvalFn func(string, safety.Risk) bool) error` — wraps the fix execution + learn pattern logic
-- Refactor `agent.Run()` to use `Planner.Plan()` then `Executor.Execute()` instead of inline calls
-- No behaviour change — pure refactor, all existing tests/builds must still pass
-- Update `internal/agent/agent.go` to wire them together
-
----
-
-### TASK-004: Skill creation via CLI
-**Description:** Add `nebula skill create <name>` which opens an interactive prompt to write a new skill and saves it to `~/.config/nebula/skills/<name>.md`.
-
-**Details:**
-- New subcommand under `newSkillCmd()`: `create <name>`
-- Prompt for: description (single line), instructions (multi-line, end with empty line or Ctrl+D)
-- Write the file in the standard frontmatter format:
-  ```
-  ---
-  description: <user input>
-  ---
-  <instructions>
-  ```
-- Print: `Skill saved to ~/.config/nebula/skills/<name>.md`
-- File to change: `internal/cli/commands.go`
-- No new dependencies — use `bufio.Scanner` for multi-line input
-
----
-
-### TASK-005: Workflow list command
-**Description:** Add `nebula workflow list` to show all past background workflow jobs with their status.
-
-**Details:**
-- New subcommand under `newWorkflowCmd()`: `list`
-- Calls `store.ListWorkflowJobs(ctx, 20)`
-- Output format:
-  ```
-  ID                                    STATUS   STEP         STARTED
-  ----                                  ------   ----         -------
-  abc-123...                            done                  2026-09-21 10:30
-  def-456...                            running  write        2026-09-21 11:00
-  ```
-- File to change: `internal/cli/commands.go`
+- Reorder the switch cases: check `terminal` → `code` → `research` → `writing` → `general`. Code prompts are more common and more distinct; writing should be last.
+- Remove `"write"` from `writingKeywords` — it's too generic. Keep specific terms like `"draft"`, `"essay"`, `"prose"`, `"novel"`, `"poem"`, `"copywriting"`.
+- Add `"write a"`, `"write me a"` as code/general keywords only if they appear with a technical noun, but don't try to be clever — just fix the ordering and prune the false-match word.
+- Update `TestDetectDomain` in `internal/agent/agent_test.go` to add a case: `"write a python script"` → `"code"` (currently fails)
 
 ---
 

@@ -51,6 +51,8 @@ func TestDetectDomain(t *testing.T) {
 		{"install docker on ubuntu", "terminal"},
 		{"fix this golang bug in my code", "code"},
 		{"debug the panic in this function", "code"},
+		{"write a python script", "code"},
+		{"write a novel", "writing"},
 		{"write an essay about the ocean", "writing"},
 		{"draft an email to my boss", "writing"},
 		{"explain the difference between TCP and UDP", "research"},

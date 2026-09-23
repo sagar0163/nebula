@@ -235,10 +235,10 @@ func detectDomain(input string) string {
 		return "terminal"
 	case containsAny(lower, codeKeywords...):
 		return "code"
-	case containsAny(lower, writingKeywords...):
-		return "writing"
 	case containsAny(lower, researchKeywords...):
 		return "research"
+	case containsAny(lower, writingKeywords...):
+		return "writing"
 	default:
 		return "general"
 	}
@@ -268,7 +268,7 @@ var codeKeywords = []string{
 }
 
 var writingKeywords = []string{
-	"write", "draft", "edit", "rewrite", "essay", "email", "blog", "novel",
+	"draft", "edit", "rewrite", "essay", "email", "blog", "novel",
 	"prose", "story", "article", "poem", "poetry", "resume", "cover letter",
 	"headline", "copywriting",
 }

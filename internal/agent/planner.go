@@ -8,6 +8,7 @@ import (
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
 	"github.com/sagar0163/nebula/internal/models"
+	"github.com/sagar0163/nebula/internal/safety"
 )
 
 type Planner struct {
@@ -32,7 +33,7 @@ func (p *Planner) Plan(ctx context.Context, failCmd, output string) (*models.Hea
 }
 
 func (p *Planner) diagnose(ctx context.Context, cmd, output string) (*models.HealSuggestion, error) {
-	prompt := buildDiagnosePrompt(cmd, output)
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output))
 	req := llm.Request{
 		SystemPrompt: systemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},

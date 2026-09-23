@@ -340,12 +340,14 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	failCmd := "curl -H 'Authorization: Bearer sk-abc123xyz456789012345' api.example.com"
 	failOut := "AKIAIOSFODNN7EXAMPLE123 not found"
 
-	// Bug documented by this test: buildDiagnosePrompt embeds the raw command
-	// and output without calling safety.ScrubSecrets, so secrets reach the LLM.
-	prompt := buildDiagnosePrompt(failCmd, failOut)
+	// buildDiagnosePrompt on its own embeds the raw command and output, but
+	// diagnose() scrubs before building the prompt, so secrets never reach the
+	// LLM. This test asserts the fixed behaviour: the outbound request must not
+	// contain the raw secrets.
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut))
 	for _, secret := range []string{"sk-abc123xyz456789012345", "AKIAIOSFODNN7EXAMPLE123"} {
-		if !strings.Contains(prompt, secret) {
-			t.Errorf("buildDiagnosePrompt output lacks %q — scrub wiring appears to be present", secret)
+		if strings.Contains(prompt, secret) {
+			t.Errorf("scrubbed prompt still contains %q", secret)
 		}
 	}
 
@@ -365,14 +367,12 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	defer rec.mu.Unlock()
 	content := rec.lastReq.Messages[0].Content
 	for _, secret := range []string{"sk-abc123xyz456789012345", "AKIAIOSFODNN7EXAMPLE123"} {
-		if !strings.Contains(content, secret) {
-			t.Errorf("diagnose request lacks %q — scrub wiring appears to be present", secret)
+		if strings.Contains(content, secret) {
+			t.Errorf("diagnose request leaks %q — scrub wiring is missing", secret)
 		}
 	}
 	scrubbed := safety.ScrubSecrets(content)
-	for _, secret := range []string{"sk-abc", "AKIA"} {
-		if strings.Contains(scrubbed, secret) {
-			t.Errorf("safety.ScrubSecrets would not neutralize %q in: %q", secret, scrubbed)
-		}
+	if scrubbed != content {
+		t.Errorf("diagnose request still contains secrets: %q", content)
 	}
 }

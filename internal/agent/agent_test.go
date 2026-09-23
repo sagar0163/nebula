@@ -13,6 +13,7 @@ import (
 
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
+	"github.com/sagar0163/nebula/internal/models"
 	"github.com/sagar0163/nebula/internal/pty"
 	"github.com/sagar0163/nebula/internal/safety"
 )
@@ -130,5 +131,27 @@ func TestPlannerExecutorWiring(t *testing.T) {
 	}
 	if !approved {
 		t.Fatal("Execute never consulted the approval function")
+	}
+}
+
+func TestExecutorRejectsDangerousFixCmd(t *testing.T) {
+	router := llm.NewRouter()
+	executor := NewExecutor(pty.NewHarness(0), router, newTestStore(t))
+
+	var gotRisk safety.Risk
+	approver := func(cmd string, risk safety.Risk) bool {
+		gotRisk = risk
+		return false
+	}
+
+	sugg := &models.HealSuggestion{FixCmd: "rm -rf /"}
+	if err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotRisk != safety.RiskHigh && gotRisk != safety.RiskDangerous {
+		t.Fatalf("approvalFn received risk %v, want RiskHigh or RiskDangerous", gotRisk)
+	}
+	if gotRisk == safety.RiskMedium {
+		t.Fatal("approvalFn received RiskMedium, safety classifier was bypassed")
 	}
 }

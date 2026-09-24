@@ -130,7 +130,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 	router.Register(llm.WorkloadDiagnose, stubProvider{response: "FIX: echo ok\nEXPLANATION: works"})
 
 	planner := NewPlanner(router, newTestStore(t))
-	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom")
+	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom", "")
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	// diagnose() scrubs before building the prompt, so secrets never reach the
 	// LLM. This test asserts the fixed behaviour: the outbound request must not
 	// contain the raw secrets.
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut))
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "")
 	for _, secret := range []string{"sk-abc123xyz456789012345", "AKIAIOSFODNN7EXAMPLE123"} {
 		if strings.Contains(prompt, secret) {
 			t.Errorf("scrubbed prompt still contains %q", secret)
@@ -355,7 +355,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, rec)
 	planner := NewPlanner(router, newTestStore(t))
-	sugg, err := planner.Plan(context.Background(), failCmd, failOut)
+	sugg, err := planner.Plan(context.Background(), failCmd, failOut, "")
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}

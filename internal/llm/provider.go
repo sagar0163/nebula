@@ -19,6 +19,7 @@ type Usage struct {
 
 // Request is a normalized LLM completion request.
 type Request struct {
+	Workload     Workload
 	SystemPrompt string
 	Messages     []Message
 	Tools        []Tool

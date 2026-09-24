@@ -49,6 +49,7 @@ func (r *Router) Complete(ctx context.Context, w Workload, req Request) (<-chan 
 			continue
 		}
 
+		req.Workload = w
 		pCtx, cancel := context.WithTimeout(ctx, timeout)
 		ch, err := p.Complete(pCtx, req)
 		if err != nil {

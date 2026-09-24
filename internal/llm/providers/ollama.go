@@ -48,7 +48,7 @@ func (p *OllamaProvider) Available(ctx context.Context) bool {
 }
 
 func (p *OllamaProvider) Complete(ctx context.Context, req llm.Request) (<-chan llm.Token, error) {
-	model := p.selectModel()
+	model := p.selectModel(req)
 
 	// Build prompt from messages (Ollama Generate uses a single prompt string).
 	prompt := buildPrompt(req)
@@ -103,7 +103,19 @@ func (p *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 	return out, nil
 }
 
-func (p *OllamaProvider) selectModel() string {
+func (p *OllamaProvider) selectModel(req llm.Request) string {
+	switch req.Workload {
+	case llm.WorkloadDiagnose:
+		if p.cfg.ModelDiagnose != "" {
+			return p.cfg.ModelDiagnose
+		}
+		return "llama3.2:3b"
+	case llm.WorkloadLearn:
+		if p.cfg.ModelLearn != "" {
+			return p.cfg.ModelLearn
+		}
+		// fallthrough to heal
+	}
 	if p.cfg.ModelHeal != "" {
 		return p.cfg.ModelHeal
 	}

@@ -43,7 +43,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req llm.Request) (<-chan 
 		return nil, fmt.Errorf("gemini: create client: %w", err)
 	}
 
-	modelName := p.selectModel()
+	modelName := p.selectModel(req)
 	model := client.GenerativeModel(modelName)
 
 	if req.SystemPrompt != "" {
@@ -122,11 +122,23 @@ func (p *GeminiProvider) Embed(ctx context.Context, text string) ([]float32, err
 	return out, nil
 }
 
-func (p *GeminiProvider) selectModel() string {
+func (p *GeminiProvider) selectModel(req llm.Request) string {
+	switch req.Workload {
+	case llm.WorkloadDiagnose:
+		if p.cfg.ModelDiagnose != "" {
+			return p.cfg.ModelDiagnose
+		}
+		return "gemini-2.0-flash"
+	case llm.WorkloadLearn:
+		if p.cfg.ModelLearn != "" {
+			return p.cfg.ModelLearn
+		}
+		// fallthrough to heal
+	}
 	if p.cfg.ModelHeal != "" {
 		return p.cfg.ModelHeal
 	}
-	return "gemini-2.0-flash"
+	return "gemini-2.5-pro"
 }
 
 // toGeminiParts converts llm.Messages to genai.Part slice for the last user turn.

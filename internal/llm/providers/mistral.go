@@ -122,10 +122,20 @@ func (p *MistralProvider) Embed(ctx context.Context, text string) ([]float32, er
 }
 
 func (p *MistralProvider) selectModel(req llm.Request) string {
-	switch {
-	case p.cfg.ModelHeal != "":
-		return p.cfg.ModelHeal
-	default:
-		return "mistral-medium-latest"
+	switch req.Workload {
+	case llm.WorkloadDiagnose:
+		if p.cfg.ModelDiagnose != "" {
+			return p.cfg.ModelDiagnose
+		}
+		return "open-mistral-nemo"
+	case llm.WorkloadLearn:
+		if p.cfg.ModelLearn != "" {
+			return p.cfg.ModelLearn
+		}
+		// fallthrough to heal
 	}
+	if p.cfg.ModelHeal != "" {
+		return p.cfg.ModelHeal
+	}
+	return "mistral-large-latest"
 }

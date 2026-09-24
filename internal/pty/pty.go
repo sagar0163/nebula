@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/term"
@@ -44,6 +46,13 @@ func NewHarness(ringSize int, captureSize int) *Harness {
 func (h *Harness) Run(ctx context.Context, name string, args []string) (*CommandResult, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), sentinelEnv()...)
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		}
+		return nil
+	}
+	cmd.WaitDelay = 3 * time.Second
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

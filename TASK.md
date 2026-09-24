@@ -57,6 +57,128 @@ nebula setup                    first-run config wizard
 
 ## Open Tasks
 
+### TASK-010: Bound PTY output capture — prevent OOM on high-volume commands
+**Severity:** critical
+**Description:** `pty.go:63` captures all PTY output into an unbounded `bytes.Buffer`. A command like `yes` or a build that dumps megabytes will grow the buffer until OOM. The capture buffer must be capped (e.g. keep only the last 512KB), separate from the ring buffer already in `Harness`.
+
+**Details:**
+- File: `internal/pty/pty.go`
+- Replace `var capture bytes.Buffer` with a ring/capped buffer that keeps only the last N bytes (512KB default)
+- `CommandResult.Stdout` should return only the capped portion
+- Add a config option for the cap size (default 512KB)
+- Add a test: run a command producing >1MB output, verify `Stdout` length is capped
+
+---
+
+### TASK-011: Add timeout to all LLM streaming calls
+**Severity:** critical
+**Description:** `router.go:44` calls `provider.Complete()` with no deadline. A hung or slow provider hangs the CLI forever — no spinner, no timeout, no fallback.
+
+**Details:**
+- File: `internal/llm/router.go`
+- Wrap each provider call with a per-provider timeout (default 60s, configurable via `~/.config/nebula/config.toml`)
+- On timeout, log the provider name and fall through to the next provider
+- Add a test using a slow mock provider that never responds
+
+---
+
+### TASK-012: Handle SIGINT — restore terminal and kill child process group
+**Severity:** high
+**Description:** Ctrl-C during `nebula run` kills nebula but leaves the child running and the terminal in raw mode. User has to type `reset`. `defer term.Restore` does not run on SIGINT.
+
+**Details:**
+- File: `internal/cli/root.go` + `internal/pty/pty.go`
+- Use `signal.NotifyContext` to catch SIGINT/SIGTERM
+- On signal: send SIGTERM to the child's process group (`syscall.Kill(-pid, syscall.SIGTERM)`)
+- Ensure `term.Restore` runs via defer before exit
+- Test: verify terminal fd is restored after a simulated signal
+
+---
+
+### TASK-013: Fix raw mode crash on non-TTY stdin (pipes and CI)
+**Severity:** high
+**Description:** `pty.go:53` calls `term.MakeRaw(os.Stdin.Fd())` unconditionally. When stdin is a pipe (`echo x | nebula run build`) it fails with "inappropriate ioctl" — completely breaking scripted and CI use.
+
+**Details:**
+- File: `internal/pty/pty.go`
+- Before calling `term.MakeRaw`, check `term.IsTerminal(int(os.Stdin.Fd()))`
+- If not a terminal: skip raw mode and stdin forwarding entirely, run with passthrough
+- Add a test that runs a command with piped stdin (non-TTY)
+
+---
+
+### TASK-014: Fix `find -exec` safety classifier bypass
+**Severity:** high
+**Description:** `safety.go:90-94` classifies commands starting with `find` as read-only/safe. `find /etc -exec rm -rf {} \;` passes as `RiskSafe` — dangerous commands auto-approved.
+
+**Details:**
+- File: `internal/safety/safety.go`
+- Commands with `find` + `-exec`, `-execdir`, `-delete` must be classified `RiskHigh` or `RiskDangerous`
+- Check for `-exec` and `-delete` flags in the full command string, not just the binary name
+- Add tests covering `find / -exec rm {} \;`, `find . -delete`, `find /tmp -execdir sh \;`
+
+---
+
+### TASK-015: Fix executor tokenization — quoted args break on spaces
+**Severity:** high
+**Description:** `executor.go:33` uses `strings.Fields(suggestion.FixCmd)` to split the fix command. A fix like `git commit -m "fix the bug"` becomes `["git", "commit", "-m", "\"fix", "the", "bug\""]` — wrong args, broken execution.
+
+**Details:**
+- File: `internal/agent/executor.go`
+- Replace `strings.Fields` with a proper shell-word tokenizer (use `github.com/google/shlex` or implement a simple quoted-string splitter)
+- Keep the metacharacter rejection — quoted args are fine, shell operators are not
+- Add tests: `git commit -m "fix the bug"`, `echo 'hello world'`, `python -c "print(1)"`
+
+---
+
+### TASK-016: Fix harness ring size 0 — AI transcript feature is inert
+**Severity:** high
+**Description:** `root.go:211` calls `pty.NewHarness(0)`. Every write trims the ring to 0 bytes so `Transcript()` always returns `""`. The "[rolling transcript for AI context]" the package documents is completely unused.
+
+**Details:**
+- File: `internal/cli/root.go`
+- Change `pty.NewHarness(0)` to `pty.NewHarness(256 * 1024)` (256KB)
+- Wire `harness.Transcript()` into the planner's diagnose prompt so the agent sees recent terminal context when suggesting a fix
+- File: `internal/agent/planner.go` — add transcript as optional context in `buildDiagnosePrompt`
+
+---
+
+### TASK-017: Implement workload-aware model selection
+**Severity:** high
+**Description:** `WorkloadDiagnose`, `WorkloadLearn`, `WorkloadEmbed` are defined but every provider's `selectModel()` only checks `cfg.ModelHeal`. The router's workload concept has zero effect — all calls use the same model.
+
+**Details:**
+- Files: `internal/llm/providers/groq.go`, `gemini.go`, `mistral.go`, `nvidia.go`, `ollama.go`
+- Update `selectModel()` in each provider to pick `cfg.ModelDiagnose` for `WorkloadDiagnose`, `cfg.ModelLearn` for `WorkloadLearn`, falling back to `cfg.ModelHeal`
+- Thread `Workload` from `Request` into the provider's model selection
+- Add defaults in config for diagnose (faster/cheaper model) vs heal (stronger model)
+
+---
+
+### TASK-018: Surface keyring errors — fix silent "no provider" failures
+**Severity:** medium
+**Description:** `root.go:106-114` does `k, _ := keyring.Get(...)` — errors silently discarded. On headless Linux (no DBus/libsecret), every key lookup fails and the user gets only "no available LLM provider" with no hint why.
+
+**Details:**
+- File: `internal/cli/root.go` `loadKeys()`
+- Collect keyring errors per provider
+- If a provider has zero keys loaded AND had keyring errors, print a warning: `"groq: keyring unavailable (no DBus session?) — set NEBULA_GROQ_KEY or run nebula key add"`
+- Also accept keys from env vars as fallback (`NEBULA_GROQ_KEY`, `NEBULA_GEMINI_KEY`, etc.)
+
+---
+
+### TASK-019: Add panic recovery to background workflow goroutines
+**Severity:** high
+**Description:** `workflow.go:113` launches background jobs in a goroutine with no `recover()`. A panic in any workflow step crashes the entire nebula process.
+
+**Details:**
+- File: `internal/workflow/workflow.go`
+- Add `defer func() { if r := recover(); r != nil { ... store error in job } }()` at the top of the background goroutine
+- Store the panic as the job's error string so `nebula workflow result <id>` surfaces it
+- Add a test: workflow step that panics → job status is "failed", result contains panic message
+
+---
+
 ### TASK-006: Fix safety bypass in Executor
 **Description:** `Executor.Execute()` hardcodes `safety.RiskMedium` when calling `approvalFn`, bypassing the safety classifier entirely. An LLM-suggested fix like `rm -rf /` would be approved as medium-risk. It must call `safety.Classify()` on the fix command first.
 

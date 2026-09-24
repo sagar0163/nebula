@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -50,42 +51,70 @@ func (r *Router) Complete(ctx context.Context, w Workload, req Request) (<-chan 
 		}
 
 		req.Workload = w
-		pCtx, cancel := context.WithTimeout(ctx, timeout)
-		ch, err := p.Complete(pCtx, req)
-		if err != nil {
-			cancel()
-			fmt.Fprintf(os.Stderr, "llm: provider %s failed: %v, falling back\n", p.Name(), err)
-			continue
-		}
+		
+		retries := 0
+		backoff := 2 * time.Second
 
-		// Wait for the first token to verify it doesn't immediately error/timeout.
-		t, ok := <-ch
-		if !ok {
-			cancel()
-			// Stream closed immediately without error, return empty channel.
-			empty := make(chan Token)
-			close(empty)
-			return empty, nil
-		}
-
-		if t.Err != nil {
-			cancel()
-			fmt.Fprintf(os.Stderr, "llm: provider %s error: %v, falling back\n", p.Name(), t.Err)
-			continue
-		}
-
-		// First token was successful. Spin up a goroutine to forward it and the rest.
-		out := make(chan Token, 32)
-		go func() {
-			defer close(out)
-			defer cancel()
-			out <- t
-			for x := range ch {
-				out <- x
+		var out chan Token
+		
+		for {
+			pCtx, cancel := context.WithTimeout(ctx, timeout)
+			ch, err := p.Complete(pCtx, req)
+			
+			var streamErr error
+			var firstToken Token
+			var ok bool
+			
+			if err != nil {
+				streamErr = err
+			} else {
+				firstToken, ok = <-ch
+				if !ok {
+					streamErr = nil // stream closed ok immediately
+				} else if firstToken.Err != nil {
+					streamErr = firstToken.Err
+				}
 			}
-		}()
 
-		return out, nil
+			if streamErr != nil {
+				cancel()
+				
+				msg := streamErr.Error()
+				if isRL(msg) && retries < 3 {
+					fmt.Fprintf(os.Stderr, "llm: provider %s rate limited, retrying in %v...\n", p.Name(), backoff)
+					select {
+					case <-time.After(backoff):
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					retries++
+					backoff *= 2
+					continue
+				}
+
+				fmt.Fprintf(os.Stderr, "llm: provider %s failed: %v, falling back\n", p.Name(), streamErr)
+				break // fallback to next provider
+			}
+
+			if !ok {
+				cancel()
+				empty := make(chan Token)
+				close(empty)
+				return empty, nil
+			}
+
+			out = make(chan Token, 32)
+			go func() {
+				defer close(out)
+				defer cancel()
+				out <- firstToken
+				for x := range ch {
+					out <- x
+				}
+			}()
+			
+			return out, nil
+		}
 	}
 
 	return nil, fmt.Errorf("no available LLM provider for workload %d", w)
@@ -99,4 +128,9 @@ func (r *Router) Embed(ctx context.Context, text string) ([]float32, error) {
 		}
 	}
 	return nil, fmt.Errorf("no available embedding provider")
+}
+
+func isRL(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "429") || strings.Contains(msg, "rate limit")
 }

@@ -21,6 +21,9 @@ func skillsDir() string {
 
 // Load reads a skill by name from ~/.config/nebula/skills/<name>.md.
 func Load(name string) (*Skill, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+		return nil, fmt.Errorf("invalid skill name %q", name)
+	}
 	path := filepath.Join(skillsDir(), name+".md")
 	data, err := os.ReadFile(path)
 	if err != nil {

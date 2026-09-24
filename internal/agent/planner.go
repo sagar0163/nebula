@@ -24,6 +24,9 @@ func NewPlanner(router *llm.Router, store memory.Store) *Planner {
 }
 
 func (p *Planner) Plan(ctx context.Context, failCmd, output string) (*models.HealSuggestion, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Try recalling a similar past fix before calling the LLM.
 	if recalled, err := p.recallPattern(ctx, failCmd, output); err == nil && recalled != nil {
 		return recalled, nil

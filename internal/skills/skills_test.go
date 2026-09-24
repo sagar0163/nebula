@@ -1,9 +1,11 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -269,4 +271,153 @@ func TestSkillListChaos(t *testing.T) {
 			t.Fatalf("List = %+v, want only [top]", list)
 		}
 	})
+}
+
+func TestLoadHundredSkills(t *testing.T) {
+	dir := mkSkillsHome(t)
+	const n = 100
+	for i := 0; i < n; i++ {
+		name := "skill-" + string(rune('a'+i%26)) + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		if err := os.WriteFile(filepath.Join(dir, name+".md"),
+			[]byte("---\ndescription: skill "+string(rune('0'+i%10))+"\n---\nbody "+string(rune('0'+i%10))), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != n {
+		t.Fatalf("List returned %d skills, want %d", len(list), n)
+	}
+	seen := map[string]bool{}
+	for _, s := range list {
+		if seen[s.Name] {
+			t.Fatalf("duplicate skill name %q in List", s.Name)
+		}
+		seen[s.Name] = true
+		if s.Instructions == "" {
+			t.Fatalf("skill %q has empty instructions", s.Name)
+		}
+	}
+}
+
+func TestLoadPathTraversalRejected(t *testing.T) {
+	mkSkillsHome(t)
+	// Even if the escaped path exists, the loader must refuse traversal names.
+	bad := []string{
+		"../../../etc/passwd",
+		"..\\..\\..\\windows\\win.ini",
+		"../sibling",
+		"a/b",
+		"nested\\skill",
+		"..",
+		".",
+		"",
+	}
+	for _, name := range bad {
+		if _, err := Load(name); err == nil {
+			t.Errorf("Load(%q) returned nil error, want rejection", name)
+		}
+	}
+}
+
+func TestLoadDoesNotEscapeSkillsDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".config", "nebula", "skills")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Drop a decoy at the exact path a traversal name would resolve to.
+	escapeRoot := filepath.Join(home, "etc")
+	if err := os.MkdirAll(escapeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(escapeRoot, "passwd.md"), []byte("Sneaky config that a traversal would read."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load("../../../etc/passwd"); err == nil {
+		t.Fatal("Load(traversal) followed the escaped path; skills loader must not read outside the skills dir")
+	}
+}
+
+func TestCircularDependencyReferencesAreInert(t *testing.T) {
+	dir := mkSkillsHome(t)
+	// Skills have no dependency-resolution mechanism, so frontmatter that
+	// references other skills (including circularly) must load without
+	// recursion, hanging, or erroring.
+	a := "---\ndescription: needs skill-b\n---\nUse skill-b first."
+	b := "---\ndescription: needs skill-a\n---\nUse skill-a first."
+	if err := os.WriteFile(filepath.Join(dir, "skill-a.md"), []byte(a), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skill-b.md"), []byte(b), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *Skill, 2)
+	errs := make(chan error, 2)
+	for _, name := range []string{"skill-a", "skill-b"} {
+		go func(name string) {
+			s, err := Load(name)
+			if err != nil {
+				errs <- err
+				return
+			}
+			done <- s
+		}(name)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errs:
+			t.Fatalf("circular-referencing skill failed to load: %v", err)
+		case s := <-done:
+			if s.Instructions == "" {
+				t.Fatalf("skill %q loaded with empty instructions", s.Name)
+			}
+		}
+	}
+}
+
+func TestConcurrentSkillLoads(t *testing.T) {
+	dir := mkSkillsHome(t)
+	for i := 0; i < 5; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "conc-"+string(rune('0'+i))+".md"),
+			[]byte("---\ndescription: concurrent\n---\nbody"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				name := "conc-" + string(rune('0'+i%5))
+				s, err := Load(name)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if s.Name != name {
+					errs <- fmt.Errorf("loaded %q, want %q", s.Name, name)
+					return
+				}
+			}
+			list, err := List()
+			if err != nil {
+				errs <- err
+				return
+			}
+			if len(list) != 5 {
+				errs <- fmt.Errorf("List returned %d, want 5", len(list))
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent skill load error: %v", err)
+	}
 }

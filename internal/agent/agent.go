@@ -52,6 +52,9 @@ type RunResult struct {
 // Run executes args through the PTY harness, healing on failure.
 // It applies the safety policy before and after healing.
 func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if len(args) == 0 {
 		return nil, fmt.Errorf("no command provided")
 	}
@@ -91,6 +94,16 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		ExitCode: cmdResult.ExitCode,
 		Stdout:   string(cmdResult.Stdout),
 	})
+
+	// On success the doom-loop fingerprint is reset so a healed state does
+	// not carry stale failure counts into future runs.
+	if cmdResult.ExitCode == 0 {
+		outHash := sha256.Sum256(cmdResult.Stdout)
+		fingerprint := fmt.Sprintf("%s:%x", raw, outHash[:8])
+		a.doomMu.Lock()
+		delete(a.doomLoopCounts, fingerprint)
+		a.doomMu.Unlock()
+	}
 
 	// 5. On failure, attempt healing.
 	if cmdResult.ExitCode != 0 {
@@ -132,6 +145,9 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 // Ask handles a general-purpose request in any domain, streaming the LLM
 // response and returning the full string. The task is saved to memory.
 func (a *Agent) Ask(ctx context.Context, input string, stream bool) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return "", fmt.Errorf("empty input")

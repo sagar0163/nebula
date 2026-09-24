@@ -27,6 +27,9 @@ func NewExecutor(harness *pty.Harness, router *llm.Router, store memory.Store) *
 }
 
 func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestion, failOutput string, approvalFn func(string, safety.Risk) bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	args := strings.Fields(suggestion.FixCmd)
 	if len(args) == 0 {
 		return errors.New("fix command is empty")

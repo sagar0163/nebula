@@ -50,7 +50,7 @@ func waitGoroutines(t *testing.T) {
 
 func TestRunExitCodes(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	cases := []struct {
 		name string
 		args []string
@@ -77,7 +77,7 @@ func TestRunExitCodes(t *testing.T) {
 
 func TestRunZeroOutput(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	res, err := h.Run(context.Background(), "true", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -92,7 +92,7 @@ func TestRunZeroOutput(t *testing.T) {
 
 func TestRunLargeOutput(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	start := time.Now()
 	res, err := h.Run(context.Background(), "sh", []string{"-c", "yes n | head -c 500000"})
 	if err != nil {
@@ -111,7 +111,7 @@ func TestRunLargeOutput(t *testing.T) {
 
 func TestRunSleepThenExit(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	start := time.Now()
 	res, err := h.Run(context.Background(), "sh", []string{"-c", "sleep 2; exit 3"})
 	if err != nil {
@@ -127,7 +127,7 @@ func TestRunSleepThenExit(t *testing.T) {
 
 func TestRunContextCancel(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
@@ -145,7 +145,7 @@ func TestRunContextCancel(t *testing.T) {
 
 func TestRunStderrOnly(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	res, err := h.Run(context.Background(), "sh", []string{"-c", "echo only-on-stderr >&2; exit 7"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -160,7 +160,7 @@ func TestRunStderrOnly(t *testing.T) {
 
 func TestRunConcurrentSameHarness(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1 << 20)
+	h := NewHarness(1<<20, 512*1024)
 	var wg sync.WaitGroup
 	errs := make(chan error, 10)
 	for i := 0; i < 10; i++ {
@@ -194,7 +194,7 @@ func TestRunConcurrentSameHarness(t *testing.T) {
 func TestRingBufferNeverExceedsMaxSize(t *testing.T) {
 	defer withStdinTTY(t)()
 	const maxSize = 128
-	h := NewHarness(maxSize)
+	h := NewHarness(maxSize, 512*1024)
 
 	for i := 0; i < 6; i++ {
 		res, err := h.Run(context.Background(), "sh", []string{"-c", "yes n | head -c 500000"})
@@ -224,12 +224,65 @@ func TestRingBufferNeverExceedsMaxSize(t *testing.T) {
 
 func TestRunCommandNotFound(t *testing.T) {
 	defer withStdinTTY(t)()
-	h := NewHarness(1024)
+	h := NewHarness(1024, 512*1024)
 	_, err := h.Run(context.Background(), "definitely-not-a-real-binary-xyz-12345", nil)
 	if err == nil {
 		t.Fatal("Run(unknown binary) returned a nil error")
 	}
 	if !strings.Contains(err.Error(), "pty start") {
 		t.Fatalf("err = %v, want 'pty start' wrapping exec failure", err)
+	}
+}
+
+func TestCappedBuffer_Run(t *testing.T) {
+	// Create a harness with a small cap for testing
+	h := NewHarness(0, 1024)
+
+	// Create 5000 bytes of output using python
+	ctx := context.Background()
+	res, err := h.Run(ctx, "python3", []string{"-c", "print('x' * 5000)"})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	if len(res.Stdout) > 1024 {
+		t.Errorf("expected stdout length <= 1024, got %d", len(res.Stdout))
+	}
+
+	// Verify it captured the end of the output (which is 'x' followed by newline)
+	if !strings.Contains(string(res.Stdout), "x") {
+		t.Errorf("stdout doesn't contain expected output")
+	}
+}
+
+func TestHarness_SignalKill(t *testing.T) {
+	h := NewHarness(0, 1024)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
+	resCh := make(chan *CommandResult, 1)
+
+	go func() {
+		res, err := h.Run(ctx, "sleep", []string{"10"})
+		if err != nil {
+			errCh <- err
+		} else {
+			resCh <- res
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		// Some implementations might return a direct error on context cancel
+		t.Logf("Got expected error: %v", err)
+	case res := <-resCh:
+		if res.ExitCode != -1 {
+			t.Fatalf("expected exit code -1 (signal termination), got %d", res.ExitCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return in time after context cancellation")
 	}
 }

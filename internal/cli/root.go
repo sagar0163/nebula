@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -208,7 +210,7 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	harness := pty.NewHarness(0)
+	harness := pty.NewHarness(256*1024, viper.GetInt("pty.capture_cap_bytes"))
 	return agent.New(harness, router, store), nil
 }
 
@@ -275,7 +277,11 @@ func runCommand(args []string) error {
 			return resp == "y" || resp == "Y"
 		},
 	}
-	_, err = a.Run(context.Background(), args, opts)
+	
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	
+	_, err = a.Run(ctx, args, opts)
 	return err
 }
 

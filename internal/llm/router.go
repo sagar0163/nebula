@@ -3,6 +3,11 @@ package llm
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/spf13/viper"
 )
 
 // Router selects a provider based on workload and availability,
@@ -36,17 +41,82 @@ func (r *Router) Complete(ctx context.Context, w Workload, req Request) (<-chan 
 		}
 	}
 
+	timeoutSec := viper.GetInt("llm.timeout_seconds")
+	if timeoutSec <= 0 {
+		timeoutSec = 60
+	}
+	timeout := time.Duration(timeoutSec) * time.Second
+
 	var lastErr error
 	for _, p := range chain {
 		if !p.Available(ctx) {
 			continue
 		}
-		ch, err := p.Complete(ctx, req)
-		if err != nil {
-			lastErr = err
-			continue
+
+		req.Workload = w
+
+		retries := 0
+		backoff := 2 * time.Second
+
+		for {
+			pCtx, cancel := context.WithTimeout(ctx, timeout)
+			ch, err := p.Complete(pCtx, req)
+
+			var streamErr error
+			var firstToken Token
+			var ok bool
+
+			if err != nil {
+				streamErr = err
+				lastErr = streamErr
+			} else {
+				firstToken, ok = <-ch
+				if !ok {
+					streamErr = nil // stream closed ok immediately
+				} else if firstToken.Err != nil {
+					streamErr = firstToken.Err
+				}
+			}
+
+			if streamErr != nil {
+				cancel()
+
+				msg := streamErr.Error()
+				if isRL(msg) && retries < 3 {
+					fmt.Fprintf(os.Stderr, "llm: provider %s rate limited, retrying in %v...\n", p.Name(), backoff)
+					select {
+					case <-time.After(backoff):
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					retries++
+					backoff *= 2
+					continue
+				}
+
+				fmt.Fprintf(os.Stderr, "llm: provider %s failed: %v, falling back\n", p.Name(), streamErr)
+				break // fallback to next provider
+			}
+
+			if !ok {
+				cancel()
+				empty := make(chan Token)
+				close(empty)
+				return empty, nil
+			}
+
+			out := make(chan Token, 32)
+			go func() {
+				defer close(out)
+				defer cancel()
+				out <- firstToken
+				for x := range ch {
+					out <- x
+				}
+			}()
+
+			return out, nil
 		}
-		return ch, nil
 	}
 
 	if lastErr != nil {
@@ -74,4 +144,9 @@ func (r *Router) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("no available embedding provider")
+}
+
+func isRL(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "429") || strings.Contains(msg, "rate limit")
 }

@@ -127,8 +127,20 @@ func (p *NvidiaProvider) Embed(ctx context.Context, text string) ([]float32, err
 }
 
 func (p *NvidiaProvider) selectModel(req llm.Request) string {
+	switch req.Workload {
+	case llm.WorkloadDiagnose:
+		if p.cfg.ModelDiagnose != "" {
+			return p.cfg.ModelDiagnose
+		}
+		return "nvidia/llama-3.1-nemotron-70b-instruct"
+	case llm.WorkloadLearn:
+		if p.cfg.ModelLearn != "" {
+			return p.cfg.ModelLearn
+		}
+		// fallthrough to heal
+	}
 	if p.cfg.ModelHeal != "" {
 		return p.cfg.ModelHeal
 	}
-	return "nvidia/nemotron-3-super-120b-a12b"
+	return "meta/llama-3.1-405b-instruct"
 }

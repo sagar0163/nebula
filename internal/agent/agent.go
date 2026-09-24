@@ -120,7 +120,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 			return result, fmt.Errorf("healing loop detected after 3 attempts — manual intervention required")
 		}
 
-		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout))
+		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout), a.harness.Transcript())
 		if err != nil {
 			return result, nil // best-effort: return without healing
 		}

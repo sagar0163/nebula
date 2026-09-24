@@ -37,6 +37,20 @@ model_heal     = "llama3.2"
 model_learn    = "llama3.1:70b"
 model_embed    = "nomic-embed-text"
 
+[llm.mistral]
+api_key = ""
+model_diagnose = "open-mistral-nemo"
+model_heal     = "mistral-large-latest"
+model_learn    = "mistral-large-latest"
+model_embed    = "mistral-embed"
+
+[llm.nvidia]
+api_key = ""
+model_diagnose = "nvidia/llama-3.1-nemotron-70b-instruct"
+model_heal     = "meta/llama-3.1-405b-instruct"
+model_learn    = "meta/llama-3.1-405b-instruct"
+model_embed    = "nvidia/nv-embedqa-e5-v5"
+
 [memory]
 db_path = "~/.local/share/nebula/nebula.db"
 # Max ring buffer size in bytes kept in memory for AI context

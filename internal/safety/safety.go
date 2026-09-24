@@ -89,6 +89,12 @@ func Classify(cmd string) Risk {
 
 	for _, ro := range readOnlyPrefixes {
 		if strings.HasPrefix(cmd, ro) {
+			// find commands can have side effects
+			if strings.HasPrefix(cmd, "find") || strings.HasPrefix(cmd, "find ") {
+				if strings.Contains(cmd, "-exec") || strings.Contains(cmd, "-execdir") || strings.Contains(cmd, "-delete") {
+					return RiskDangerous
+				}
+			}
 			return RiskSafe
 		}
 	}

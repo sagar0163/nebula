@@ -49,7 +49,7 @@ func (p *GroqProvider) Available(ctx context.Context) bool {
 }
 
 func (p *GroqProvider) Complete(ctx context.Context, req llm.Request) (<-chan llm.Token, error) {
-	model := p.selectModel()
+	model := p.selectModel(req)
 	msgs := buildOpenAIMessages(req)
 
 	params := openai.ChatCompletionNewParams{
@@ -99,7 +99,19 @@ func (p *GroqProvider) Embed(_ context.Context, _ string) ([]float32, error) {
 	return nil, fmt.Errorf("groq: embedding not supported")
 }
 
-func (p *GroqProvider) selectModel() string {
+func (p *GroqProvider) selectModel(req llm.Request) string {
+	switch req.Workload {
+	case llm.WorkloadDiagnose:
+		if p.cfg.ModelDiagnose != "" {
+			return p.cfg.ModelDiagnose
+		}
+		return "llama-3.1-8b-instant"
+	case llm.WorkloadLearn:
+		if p.cfg.ModelLearn != "" {
+			return p.cfg.ModelLearn
+		}
+		// fallthrough to heal
+	}
 	if p.cfg.ModelHeal != "" {
 		return p.cfg.ModelHeal
 	}

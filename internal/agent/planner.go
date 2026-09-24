@@ -23,7 +23,7 @@ func NewPlanner(router *llm.Router, store memory.Store) *Planner {
 	}
 }
 
-func (p *Planner) Plan(ctx context.Context, failCmd, output string) (*models.HealSuggestion, error) {
+func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string) (*models.HealSuggestion, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -32,11 +32,11 @@ func (p *Planner) Plan(ctx context.Context, failCmd, output string) (*models.Hea
 		return recalled, nil
 	}
 
-	return p.diagnose(ctx, failCmd, output)
+	return p.diagnose(ctx, failCmd, output, transcript)
 }
 
-func (p *Planner) diagnose(ctx context.Context, cmd, output string) (*models.HealSuggestion, error) {
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output))
+func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string) (*models.HealSuggestion, error) {
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript))
 	req := llm.Request{
 		SystemPrompt: systemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
@@ -73,17 +73,25 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 	}, nil
 }
 
-func buildDiagnosePrompt(cmd, output string) string {
-	return fmt.Sprintf(`A shell command failed. Diagnose the error and suggest a fix.
+func buildDiagnosePrompt(cmd, output, transcript string) string {
+	prompt := fmt.Sprintf(`A shell command failed. Diagnose the error and suggest a fix.
 
 Command: %s
 
 Output:
 %s
+`, cmd, output)
 
+	if transcript != "" {
+		prompt += fmt.Sprintf("\nRecent Terminal Context:\n%s\n", transcript)
+	}
+
+	prompt += `
 Respond with:
 FIX: <the exact fix command>
-EXPLANATION: <one sentence explaining what went wrong and why the fix works>`, cmd, output)
+EXPLANATION: <one sentence explaining what went wrong and why the fix works>`
+
+	return prompt
 }
 
 func parseSuggestion(originalCmd, response string) *models.HealSuggestion {

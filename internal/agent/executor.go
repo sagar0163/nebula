@@ -3,7 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+
+	"github.com/google/shlex"
 
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
@@ -26,12 +29,41 @@ func NewExecutor(harness *pty.Harness, router *llm.Router, store memory.Store) *
 	}
 }
 
+func containsUnquotedMeta(s string) bool {
+	inSQuote := false
+	inDQuote := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' {
+			i++
+			continue
+		}
+		if c == '\'' && !inDQuote {
+			inSQuote = !inSQuote
+			continue
+		}
+		if c == '"' && !inSQuote {
+			inDQuote = !inDQuote
+			continue
+		}
+		if !inSQuote && !inDQuote {
+			if strings.ContainsRune("|><;&`$()", rune(c)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestion, failOutput string, approvalFn func(string, safety.Risk) bool) error {
-	args := strings.Fields(suggestion.FixCmd)
+	args, err := shlex.Split(suggestion.FixCmd)
+	if err != nil {
+		return fmt.Errorf("parse fix command: %w", err)
+	}
 	if len(args) == 0 {
 		return errors.New("fix command is empty")
 	}
-	if strings.ContainsAny(suggestion.FixCmd, "|><;&`$()") {
+	if containsUnquotedMeta(suggestion.FixCmd) {
 		return errors.New("fix command contains shell metacharacters — manual review required")
 	}
 

@@ -23,7 +23,6 @@ type Step struct {
 	Name         string             `yaml:"name"`
 	Skill        string             `yaml:"skill"`
 	Prompt       string             `yaml:"prompt"`
-	DependsOn    []string           `yaml:"depends_on"`
 	ParsedPrompt *template.Template `yaml:"-"`
 }
 
@@ -123,10 +122,10 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 		defer cancel()
 
 		updateJob := func(terminal bool) {
-			if err := store.UpdateWorkflowJob(bgCtx, job); err != nil {
+			if err := store.UpdateWorkflowJob(context.Background(), job); err != nil {
 				log.Printf("warn: update workflow job %s: %v", job.ID, err)
 				if terminal {
-					if err2 := store.UpdateWorkflowJob(bgCtx, job); err2 != nil {
+					if err2 := store.UpdateWorkflowJob(context.Background(), job); err2 != nil {
 						log.Printf("warn: retry update workflow job %s: %v", job.ID, err2)
 					}
 				}

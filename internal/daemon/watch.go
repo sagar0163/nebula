@@ -25,19 +25,19 @@ func Watch(ctx context.Context, a *agent.Agent, store memory.Store, queueDir str
 	defer ticker.Stop()
 
 	// Initial check immediately
-	checkQueue(a, store, queueDir, doneDir)
+	checkQueue(ctx, a, store, queueDir, doneDir)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			checkQueue(a, store, queueDir, doneDir)
+			checkQueue(ctx, a, store, queueDir, doneDir)
 		}
 	}
 }
 
-func checkQueue(a *agent.Agent, store memory.Store, queueDir, doneDir string) {
+func checkQueue(ctx context.Context, a *agent.Agent, store memory.Store, queueDir, doneDir string) {
 	entries, err := os.ReadDir(queueDir)
 	if err != nil {
 		return
@@ -72,15 +72,21 @@ func checkQueue(a *agent.Agent, store memory.Store, queueDir, doneDir string) {
 		os.Rename(path, donePath)
 
 		go func(jobID, filename string) {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
 			for {
-				time.Sleep(2 * time.Second)
-				job, err := store.GetWorkflowJob(context.Background(), jobID)
-				if err != nil {
-					continue
-				}
-				if job.Status == "done" || job.Status == "failed" {
-					fmt.Printf("Job finished: %s (file: %s, status: %s)\n", jobID, filename, job.Status)
+				select {
+				case <-ctx.Done():
 					return
+				case <-ticker.C:
+					job, err := store.GetWorkflowJob(context.Background(), jobID)
+					if err != nil {
+						continue
+					}
+					if job.Status == "done" || job.Status == "failed" {
+						fmt.Printf("Job finished: %s (file: %s, status: %s)\n", jobID, filename, job.Status)
+						return
+					}
 				}
 			}
 		}(id, entry.Name())

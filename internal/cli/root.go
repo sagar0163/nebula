@@ -304,8 +304,14 @@ func runCommand(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	
-	_, err = a.Run(ctx, args, opts)
-	return err
+	res, err := a.Run(ctx, args, opts)
+	if err != nil {
+		return err
+	}
+	if res != nil && res.ExitCode != 0 {
+		os.Exit(res.ExitCode)
+	}
+	return nil
 }
 
 // runAsk sends a general-purpose prompt to the agent and prints the response.

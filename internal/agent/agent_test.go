@@ -379,6 +379,24 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	}
 }
 
+func TestDiagnosePromptStripsANSI(t *testing.T) {
+	failCmd := "go test ./..."
+	failOut := "\x1b[31;1m--- FAIL: TestExample (0.01s)\x1b[0m\n    example_test.go:10: \x1b[33munexpected value\x1b[0m"
+	transcript := "\x1b]0;Title\x07\x1b[2KRunning..."
+
+	prompt := buildDiagnosePrompt(failCmd, failOut, transcript)
+	if strings.Contains(prompt, "\x1b[") || strings.Contains(prompt, "\x1b]") {
+		t.Fatalf("buildDiagnosePrompt contains unstripped ANSI sequences: %q", prompt)
+	}
+	if !strings.Contains(prompt, "--- FAIL: TestExample (0.01s)") {
+		t.Errorf("prompt missing cleaned failOut content: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Running...") {
+		t.Errorf("prompt missing cleaned transcript content: %q", prompt)
+	}
+}
+
+
 // ---------------------------------------------------------------------------
 // Executor metacharacter, unicode, and size chaos
 // ---------------------------------------------------------------------------

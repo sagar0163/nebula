@@ -392,7 +392,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-040: Strip ANSI escape sequences before passing terminal output to LLM
+### TASK-040: Strip ANSI escape sequences before passing terminal output to LLM (DONE)
 **Severity:** medium
 **Category:** efficiency
 **Description:** Terminal commands executed through PTY output raw ANSI color codes, cursor movements, and control sequences (e.g., `\x1b[31m`, `\x1b[0m`). These consume significant token budget and cause degraded reasoning / hallucinations on smaller models (e.g. Llama 3 8B, 7B models) without providing diagnostic value.

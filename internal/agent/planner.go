@@ -8,6 +8,7 @@ import (
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
 	"github.com/sagar0163/nebula/internal/models"
+	"github.com/sagar0163/nebula/internal/pty"
 	"github.com/sagar0163/nebula/internal/safety"
 )
 
@@ -75,6 +76,9 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 }
 
 func buildDiagnosePrompt(cmd, output, transcript string) string {
+	output = pty.StripANSI(output)
+	transcript = pty.StripANSI(transcript)
+
 	output = strings.ReplaceAll(output, "FIX:", "F-I-X:")
 	output = strings.ReplaceAll(output, "EXPLANATION:", "E-X-P-L-A-N-A-T-I-O-N:")
 	transcript = strings.ReplaceAll(transcript, "FIX:", "F-I-X:")

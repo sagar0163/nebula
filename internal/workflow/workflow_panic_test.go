@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,12 +13,31 @@ import (
 
 type mockStore struct {
 	memory.Store
-	job *models.WorkflowJob
+	mu   sync.Mutex
+	done chan struct{}
+	job  *models.WorkflowJob
 }
 
-func (m *mockStore) SaveWorkflowJob(ctx context.Context, job *models.WorkflowJob) error { m.job = job; return nil }
-func (m *mockStore) UpdateWorkflowJob(ctx context.Context, job *models.WorkflowJob) error {
+func newMockStore() *mockStore {
+	return &mockStore{done: make(chan struct{}, 1)}
+}
+
+func (m *mockStore) SaveWorkflowJob(ctx context.Context, job *models.WorkflowJob) error {
+	m.mu.Lock()
 	m.job = job
+	m.mu.Unlock()
+	return nil
+}
+func (m *mockStore) UpdateWorkflowJob(ctx context.Context, job *models.WorkflowJob) error {
+	m.mu.Lock()
+	m.job = job
+	m.mu.Unlock()
+	if job.Status == "failed" || job.Status == "done" {
+		select {
+		case m.done <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -32,16 +52,23 @@ func TestRunBackgroundPanicRecovery(t *testing.T) {
 		},
 	}
 
-	store := &mockStore{}
+	store := newMockStore()
 
 	// Pass nil for agent to force a panic
 	_, err := wf.RunBackground(context.Background(), nil, store, nil)
 	if err != nil {
 		t.Fatalf("RunBackground returned error: %v", err)
 	}
-	
-	// Wait a bit for the goroutine to finish and panic
-	time.Sleep(100 * time.Millisecond)
+
+	// Wait for the background goroutine to finish and reach a terminal state.
+	select {
+	case <-store.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for background job to finish")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
 	if store.job == nil {
 		t.Fatal("expected job to be updated in store")

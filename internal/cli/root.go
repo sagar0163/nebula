@@ -234,7 +234,15 @@ func buildAgent() (*agent.Agent, error) {
 		capKB = 512
 	}
 	harness := pty.NewHarness(ringKB*1024, capKB*1024)
-	return agent.New(harness, router, store), nil
+	
+	depth := viper.GetInt("agent.agent_history_depth")
+	if depth <= 0 {
+		depth = 10
+	}
+	
+	return agent.New(harness, router, store, agent.Config{
+		HistoryDepth: depth,
+	}), nil
 }
 
 // agentAdapter wraps *agent.Agent to satisfy tui.AgentRunner,

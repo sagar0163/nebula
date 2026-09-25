@@ -16,6 +16,10 @@ import (
 	"github.com/sagar0163/nebula/internal/safety"
 )
 
+type Config struct {
+	HistoryDepth int
+}
+
 // Agent is the core orchestration loop: run command → detect failure →
 // diagnose → suggest fix → get approval → retry → learn.
 type Agent struct {
@@ -28,10 +32,16 @@ type Agent struct {
 
 	planner  *Planner
 	executor *Executor
+
+	sessionHistory []string
+	historyDepth   int
 }
 
 // New creates an Agent wired up with the given dependencies.
-func New(harness *pty.Harness, router *llm.Router, store memory.Store) *Agent {
+func New(harness *pty.Harness, router *llm.Router, store memory.Store, cfg Config) *Agent {
+	if cfg.HistoryDepth <= 0 {
+		cfg.HistoryDepth = 10
+	}
 	return &Agent{
 		harness:        harness,
 		router:         router,
@@ -39,6 +49,8 @@ func New(harness *pty.Harness, router *llm.Router, store memory.Store) *Agent {
 		doomLoopCounts: make(map[string]int),
 		planner:        NewPlanner(router, store),
 		executor:       NewExecutor(harness, router, store),
+		sessionHistory: make([]string, 0, cfg.HistoryDepth),
+		historyDepth:   cfg.HistoryDepth,
 	}
 }
 
@@ -111,6 +123,11 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		a.doomMu.Unlock()
 	}
 
+	a.sessionHistory = append(a.sessionHistory, fmt.Sprintf("%s (exit %d)", raw, cmdResult.ExitCode))
+	if len(a.sessionHistory) > a.historyDepth {
+		a.sessionHistory = a.sessionHistory[len(a.sessionHistory)-a.historyDepth:]
+	}
+
 	// 5. On failure, attempt multi-turn healing.
 	maxTurns := 3
 	history := []models.TurnRecord{}
@@ -131,7 +148,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 			return result, fmt.Errorf("healing loop detected after 3 attempts — manual intervention required")
 		}
 
-		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout), a.harness.Transcript(), history)
+		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout), a.harness.Transcript(), cmdResult.ExitCode, history, a.sessionHistory)
 		if err != nil {
 			return result, nil // best-effort: return without healing
 		}

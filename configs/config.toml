@@ -7,6 +7,7 @@ dry_run = false
 skip_permissions = false
 max_heal_retries = 3
 session_dir = "~/.local/share/nebula/sessions"
+agent_history_depth = 10
 
 [llm]
 # Primary provider: "gemini" | "groq" | "ollama" | "openai"

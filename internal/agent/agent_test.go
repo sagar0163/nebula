@@ -106,7 +106,7 @@ func stdinTTY(t *testing.T) func() {
 
 func TestRunDoomLoop(t *testing.T) {
 	defer stdinTTY(t)()
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	ctx := context.Background()
 	args := []string{"sh", "-c", "echo boom; exit 1"}
 	opts := RunOptions{SkipPermissions: true}
@@ -132,7 +132,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 	router.Register(llm.WorkloadDiagnose, stubProvider{response: "FIX: echo ok\nEXPLANATION: works"})
 
 	planner := NewPlanner(router, newTestStore(t))
-	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom", "", nil)
+	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom", "", 1, nil, nil)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestDoomLoopFingerprint(t *testing.T) {
 }
 
 func TestDoomLoopFingerprintCounting(t *testing.T) {
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	if a.doomLoopCounts == nil {
 		t.Fatal("New() did not initialize doomLoopCounts")
 	}
@@ -346,7 +346,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	// diagnose() scrubs before building the prompt, so secrets never reach the
 	// LLM. This test asserts the fixed behaviour: the outbound request must not
 	// contain the raw secrets.
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "", nil)
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "", 1, nil, nil)
 	for _, secret := range []string{"sk-abc123xyz456789012345", "AKIAIOSFODNN7EXAMPLE123"} {
 		if strings.Contains(prompt, secret) {
 			t.Errorf("scrubbed prompt still contains %q", secret)
@@ -357,7 +357,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, rec)
 	planner := NewPlanner(router, newTestStore(t))
-	sugg, err := planner.Plan(context.Background(), failCmd, failOut, "", nil)
+	sugg, err := planner.Plan(context.Background(), failCmd, failOut, "", 1, nil, nil)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestDiagnosePromptStripsANSI(t *testing.T) {
 	failOut := "\x1b[31;1m--- FAIL: TestExample (0.01s)\x1b[0m\n    example_test.go:10: \x1b[33munexpected value\x1b[0m"
 	transcript := "\x1b]0;Title\x07\x1b[2KRunning..."
 
-	prompt := buildDiagnosePrompt(failCmd, failOut, transcript, nil)
+	prompt := buildDiagnosePrompt(failCmd, failOut, transcript, 1, nil, nil)
 	if strings.Contains(prompt, "\x1b[") || strings.Contains(prompt, "\x1b]") {
 		t.Fatalf("buildDiagnosePrompt contains unstripped ANSI sequences: %q", prompt)
 	}
@@ -594,7 +594,7 @@ func TestExecutorApprovalFnCalledExactlyOnce(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDoomLoopFingerprintCollisionImmunity(t *testing.T) {
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	stdout := []byte("byte-identical output for both commands")
 
 	// Worst-case "collision": identical stdout means identical hash prefix.
@@ -617,7 +617,7 @@ func TestDoomLoopFingerprintCollisionImmunity(t *testing.T) {
 
 func TestDoomLoopResetsOnSuccess(t *testing.T) {
 	defer stdinTTY(t)()
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	counter := filepath.Join(t.TempDir(), "doom-counter")
 	cmd := "n=$(cat " + counter + " 2>/dev/null || echo 0); echo boom; echo $((n+1)) > " + counter +
 		"; if [ $((n%2)) -eq 0 ]; then exit 1; else exit 0; fi"
@@ -658,7 +658,7 @@ func TestDoomLoopResetsOnSuccess(t *testing.T) {
 
 func TestDoomLoopConcurrentUpdates(t *testing.T) {
 	defer stdinTTY(t)()
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	ctx := context.Background()
 	opts := RunOptions{SkipPermissions: true}
 	const groups = 5
@@ -737,7 +737,7 @@ func TestAskLargeInput(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadHeal, rec)
 	router.Register(llm.WorkloadLearn, rec)
-	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t), Config{HistoryDepth: 10})
 
 	input := strings.Repeat("a", 100*1024) + " explain briefly"
 	got, err := a.Ask(context.Background(), input, false)
@@ -755,7 +755,7 @@ func TestAskLargeInput(t *testing.T) {
 }
 
 func TestAskEmptyAndWhitespace(t *testing.T) {
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	for _, in := range []string{"", "   ", "\t\n", " \u00a0 "} {
 		if _, err := a.Ask(context.Background(), in, false); err == nil {
 			t.Errorf("Ask(%q) returned nil error, want 'empty input'", in)
@@ -768,7 +768,7 @@ func TestAskPassesPayloadsUnchanged(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadHeal, rec)
 	router.Register(llm.WorkloadLearn, rec)
-	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t), Config{HistoryDepth: 10})
 
 	payloads := []string{
 		`SELECT * FROM users WHERE id = 1 OR '1'='1'; DROP TABLE users; --`,
@@ -794,7 +794,7 @@ func TestAskPassesPayloadsUnchanged(t *testing.T) {
 
 func TestRunSucceedsWithoutDoomIncrement(t *testing.T) {
 	defer stdinTTY(t)()
-	a := New(pty.NewHarness(1<<16, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(1<<16, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	args := []string{"sh", "-c", "echo fine; exit 0"}
 	res, err := a.Run(context.Background(), args, RunOptions{SkipPermissions: true})
 	if err != nil {
@@ -812,7 +812,7 @@ func TestRunSucceedsWithoutDoomIncrement(t *testing.T) {
 
 func TestRunNilContextDoesNotPanic(t *testing.T) {
 	defer stdinTTY(t)()
-	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
 	res, err := a.Run(nil, []string{"true"}, RunOptions{SkipPermissions: true})
 	if err != nil {
 		t.Fatalf("Run(nil ctx) = %v", err)
@@ -825,7 +825,7 @@ func TestRunNilContextDoesNotPanic(t *testing.T) {
 func TestAskNilContextDoesNotPanic(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadHeal, stubProvider{response: "ok"})
-	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t), Config{HistoryDepth: 10})
 	if _, err := a.Ask(nil, "hello", false); err != nil {
 		t.Fatalf("Ask(nil ctx) = %v", err)
 	}
@@ -835,7 +835,7 @@ func TestRunPlannerNilSuggestionHandled(t *testing.T) {
 	defer stdinTTY(t)()
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, stubProvider{response: "I am afraid I cannot fix this"})
-	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t), Config{HistoryDepth: 10})
 	args := []string{"sh", "-c", "echo breaking; exit 1"}
 	res, err := a.Run(context.Background(), args, RunOptions{SkipPermissions: true})
 	if err != nil {
@@ -853,7 +853,7 @@ func TestRunApprovalFnPanicRecoverable(t *testing.T) {
 	defer stdinTTY(t)()
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, stubProvider{response: "FIX: echo fixed\nEXPLANATION: x"})
-	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t), Config{HistoryDepth: 10})
 	args := []string{"sh", "-c", "echo failing; exit 1"}
 
 	func() {
@@ -888,7 +888,7 @@ func newPipelineAgent(t *testing.T, resp string) *Agent {
 		t.Fatalf("memory.New: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return New(pty.NewHarness(1<<20, 512*1024), router, store)
+	return New(pty.NewHarness(1<<20, 512*1024), router, store, Config{HistoryDepth: 10})
 }
 
 func TestPipelineConcurrentHealRuns(t *testing.T) {

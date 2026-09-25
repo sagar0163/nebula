@@ -209,7 +209,7 @@ func testAgent(t *testing.T, resp string) *agent.Agent {
 		t.Fatalf("memory.New: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return agent.New(nil, router, store)
+	return agent.New(nil, router, store, agent.Config{HistoryDepth: 10})
 }
 
 func TestRenderPrompt500VarsDefined(t *testing.T) {

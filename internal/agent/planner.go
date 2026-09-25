@@ -24,7 +24,7 @@ func NewPlanner(router *llm.Router, store memory.Store) *Planner {
 	}
 }
 
-func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string, history []models.TurnRecord) (*models.HealSuggestion, error) {
+func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string, failExitCode int, history []models.TurnRecord, sessionHistory []string) (*models.HealSuggestion, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -33,7 +33,7 @@ func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string, 
 		return recalled, nil
 	}
 
-	return p.diagnose(ctx, failCmd, output, transcript, history)
+	return p.diagnose(ctx, failCmd, output, transcript, failExitCode, history, sessionHistory)
 }
 
 func (p *Planner) budgetOutput(ctx context.Context, output string) string {
@@ -70,9 +70,9 @@ func (p *Planner) budgetOutput(ctx context.Context, output string) string {
 	return head + marker + tail
 }
 
-func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, history []models.TurnRecord) (*models.HealSuggestion, error) {
+func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, failExitCode int, history []models.TurnRecord, sessionHistory []string) (*models.HealSuggestion, error) {
 	output = p.budgetOutput(ctx, output)
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript), history)
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript), failExitCode, history, sessionHistory)
 	req := llm.Request{
 		SystemPrompt: systemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
@@ -162,7 +162,7 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 	return nil, nil
 }
 
-func buildDiagnosePrompt(cmd, output, transcript string, history []models.TurnRecord) string {
+func buildDiagnosePrompt(cmd, output, transcript string, failExitCode int, history []models.TurnRecord, sessionHistory []string) string {
 	output = SummarizeOutput(output)
 	output = pty.StripANSI(output)
 	transcript = pty.StripANSI(transcript)
@@ -183,6 +183,14 @@ Output:
 	pCtx := DetectProjectContext("")
 	if pCtxStr := pCtx.String(); pCtxStr != "" {
 		prompt = pCtxStr + "\n\n" + prompt
+	}
+
+	if len(sessionHistory) > 0 {
+		prompt += "\nRecent commands (newest last):\n"
+		for _, sh := range sessionHistory {
+			prompt += fmt.Sprintf("  %s\n", sh)
+		}
+		prompt += fmt.Sprintf("  %s (exit %d) ← failing command\n", cmd, failExitCode)
 	}
 
 	if transcript != "" {

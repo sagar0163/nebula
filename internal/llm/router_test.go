@@ -340,3 +340,23 @@ func drainTokens(tokens <-chan Token) string {
 	}
 	return out
 }
+
+func TestIsRL(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"HTTP 429 Too Many Requests", true},
+		{"Rate limit exceeded for model", true},
+		{"quota exceeded", true},
+		{"too many requests", true},
+		{"internal server error", false},
+		{"500 server error", false},
+	}
+
+	for _, c := range cases {
+		if got := isRL(c.msg); got != c.want {
+			t.Errorf("isRL(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+}

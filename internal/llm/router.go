@@ -148,5 +148,8 @@ func (r *Router) Embed(ctx context.Context, text string) ([]float32, error) {
 
 func isRL(msg string) bool {
 	msg = strings.ToLower(msg)
-	return strings.Contains(msg, "429") || strings.Contains(msg, "rate limit")
+	return strings.Contains(msg, "429") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "quota exceeded")
 }

@@ -109,6 +109,21 @@ func TestRunLargeOutput(t *testing.T) {
 	}
 }
 
+func TestRunYesBoundedOutput(t *testing.T) {
+	defer withStdinTTY(t)()
+	h := NewHarness(1<<20, maxCaptureBytes)
+	res, err := h.Run(context.Background(), "sh", []string{"-c", "yes n | head -c 600000"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+	if len(res.Stdout) > maxCaptureBytes {
+		t.Fatalf("captured %d bytes, want <= %d", len(res.Stdout), maxCaptureBytes)
+	}
+}
+
 func TestRunSleepThenExit(t *testing.T) {
 	defer withStdinTTY(t)()
 	h := NewHarness(1<<20, 512*1024)

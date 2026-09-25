@@ -15,6 +15,10 @@ import (
 	"golang.org/x/term"
 )
 
+// maxCaptureBytes bounds how much of a command's PTY output we retain so a
+// high-volume command (e.g. `yes`) cannot blow up memory unboundedly.
+const maxCaptureBytes = 512 * 1024
+
 // CommandResult holds the captured output and exit code of a PTY command.
 type CommandResult struct {
 	ExitCode int
@@ -76,7 +80,7 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 	// Tee PTY output: → user's terminal + ring buffer.
 	capSize := h.maxCaptureSize
 	if capSize <= 0 {
-		capSize = 512 * 1024
+		capSize = maxCaptureBytes
 	}
 	capture := &cappedBuffer{buf: &bytes.Buffer{}, cap: capSize}
 	writer := io.MultiWriter(os.Stdout, capture, h)

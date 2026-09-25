@@ -111,6 +111,7 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 }
 
 func buildDiagnosePrompt(cmd, output, transcript string) string {
+	output = SummarizeOutput(output)
 	output = pty.StripANSI(output)
 	transcript = pty.StripANSI(transcript)
 

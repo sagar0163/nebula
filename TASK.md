@@ -539,7 +539,7 @@ nebula setup                    first-run config wizard
 
 ## Ultimate Harness Upgrade — Layer 1: Clean the Prompt
 
-### TASK-047: Summarize long command output before LLM injection
+### TASK-047: Summarize long command output before LLM injection (DONE)
 **Severity:** high
 **Category:** token efficiency
 **Description:** Stack traces and build failures routinely produce 200–2000 lines of output. Today all of it lands raw in `buildDiagnosePrompt`. A 200-line Node.js stack trace is ~8KB; a failed Go build with cascade errors can be 50KB. Most of it is noise — repeated frames, irrelevant warnings, intermediate output. The signal is in: the first error, the last few lines, and any line containing "error:", "fatal:", "panic:", "FAIL", "undefined".

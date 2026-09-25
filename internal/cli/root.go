@@ -95,7 +95,7 @@ func initConfig() {
 
 // loadKeys returns all API keys for a provider: config-file value first,
 // then keyring entries named baseKey, baseKey_2 … baseKey_9.
-func loadKeys(baseKey, configVal string) []string {
+func loadKeys(baseKey, configVal, envVar string) []string {
 	seen := map[string]bool{}
 	var keys []string
 	add := func(k string) {
@@ -105,14 +105,29 @@ func loadKeys(baseKey, configVal string) []string {
 		}
 	}
 	add(configVal)
-	if k, _ := keyring.Get("nebula", baseKey); k != "" {
+	add(os.Getenv(envVar))
+	var keyringErr error
+	k, err := keyring.Get("nebula", baseKey)
+	if err != nil && err != keyring.ErrNotFound {
+		keyringErr = err
+	}
+	if k != "" {
 		add(k)
 	}
 	for i := 2; i <= 9; i++ {
-		if k, _ := keyring.Get("nebula", baseKey+"_"+strconv.Itoa(i)); k != "" {
+		k, err := keyring.Get("nebula", baseKey+"_"+strconv.Itoa(i))
+		if err != nil && err != keyring.ErrNotFound {
+			keyringErr = err
+		}
+		if k != "" {
 			add(k)
 		}
 	}
+	
+	if len(keys) == 0 && keyringErr != nil {
+		fmt.Fprintf(os.Stderr, "nebula: keyring unavailable (%v) — set %s or run nebula key add\n", keyringErr, envVar)
+	}
+
 	return keys
 }
 
@@ -135,7 +150,7 @@ func buildAgent() (*agent.Agent, error) {
 	// LLM router.
 	router := llm.NewRouter()
 
-	for _, k := range loadKeys("groq_api_key", viper.GetString("llm.groq.api_key")) {
+	for _, k := range loadKeys("groq_api_key", viper.GetString("llm.groq.api_key"), "NEBULA_GROQ_KEY") {
 		if p := providers.NewGroq(providers.GroqConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.groq.model_diagnose"),
@@ -148,7 +163,7 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	for _, k := range loadKeys("gemini_api_key", viper.GetString("llm.gemini.api_key")) {
+	for _, k := range loadKeys("gemini_api_key", viper.GetString("llm.gemini.api_key"), "NEBULA_GEMINI_KEY") {
 		if p := providers.NewGemini(providers.GeminiConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.gemini.model_diagnose"),
@@ -179,7 +194,7 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	for _, k := range loadKeys("mistral_api_key", viper.GetString("llm.mistral.api_key")) {
+	for _, k := range loadKeys("mistral_api_key", viper.GetString("llm.mistral.api_key"), "NEBULA_MISTRAL_KEY") {
 		if p := providers.NewMistral(providers.MistralConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.mistral.model_diagnose"),
@@ -194,7 +209,7 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	for _, k := range loadKeys("nvidia_api_key", viper.GetString("llm.nvidia.api_key")) {
+	for _, k := range loadKeys("nvidia_api_key", viper.GetString("llm.nvidia.api_key"), "NEBULA_NVIDIA_KEY") {
 		if p := providers.NewNvidia(providers.NvidiaConfig{
 			APIKey:        k,
 			BaseURL:       viper.GetString("llm.nvidia.base_url"),

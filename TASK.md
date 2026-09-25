@@ -602,7 +602,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-051: Semantic pattern recall — keyword overlap instead of exact string match
+### TASK-051: Semantic pattern recall — keyword overlap instead of exact string match (DONE)
 **Severity:** medium
 **Category:** fix accuracy
 **Description:** `recallPattern` currently does exact-string match on `failCmd`. `"npm run build"` and `"npm run build --verbose"` are treated as completely different commands and never share recalled patterns. Same fix applies to both. A lightweight keyword overlap score (no embeddings needed) would dramatically improve recall hit rate.

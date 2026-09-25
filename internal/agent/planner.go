@@ -98,16 +98,68 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, 
 }
 
 func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string) (*models.HealSuggestion, error) {
+	// 1. Exact match first
 	pattern, err := p.store.FindPattern(ctx, failCmd, failOutput)
-	if err != nil || pattern == nil {
-		return nil, nil
+	if err == nil && pattern != nil {
+		return &models.HealSuggestion{
+			OriginalCmd: failCmd,
+			FixCmd:      pattern.FixCmd,
+			Explanation: "recalled from exact past fix",
+		}, nil
 	}
 
-	return &models.HealSuggestion{
-		OriginalCmd: failCmd,
-		FixCmd:      pattern.FixCmd,
-		Explanation: "recalled from similar past fix",
-	}, nil
+	// 2. Keyword overlap fallback
+	// Extract basic tokens from command and output
+	tokens := strings.Fields(failCmd)
+	lines := strings.Split(failOutput, "\n")
+	if len(lines) > 0 {
+		tokens = append(tokens, strings.Fields(lines[0])...)
+	}
+	if len(lines) > 1 {
+		tokens = append(tokens, strings.Fields(lines[1])...)
+	}
+
+	var keywords []string
+	ignore := map[string]bool{"the": true, "a": true, "is": true, "at": true, "in": true, "on": true, "to": true, "and": true}
+	for _, tok := range tokens {
+		tok = strings.ToLower(strings.TrimSpace(tok))
+		if len(tok) > 2 && !ignore[tok] {
+			keywords = append(keywords, tok)
+		}
+	}
+
+	if len(keywords) > 0 {
+		if len(keywords) > 10 {
+			keywords = keywords[:10] // limit to prevent massive queries
+		}
+		patterns, err := p.store.FindPatternsByKeywords(ctx, keywords, 10)
+		if err == nil && len(patterns) > 0 {
+			// Rank by overlap
+			bestScore := 0
+			var best *models.Pattern
+			for _, p := range patterns {
+				score := 0
+				for _, kw := range keywords {
+					if strings.Contains(strings.ToLower(p.FailCmd), kw) || strings.Contains(strings.ToLower(p.FailOutput), kw) {
+						score++
+					}
+				}
+				if score > bestScore {
+					bestScore = score
+					best = p
+				}
+			}
+			if bestScore >= 2 && best != nil {
+				return &models.HealSuggestion{
+					OriginalCmd: failCmd,
+					FixCmd:      best.FixCmd,
+					Explanation: "recalled from similar past fix (keyword match)",
+				}, nil
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 func buildDiagnosePrompt(cmd, output, transcript string, history []models.TurnRecord) string {

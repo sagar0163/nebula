@@ -395,3 +395,29 @@ func (s *SQLiteStore) ListWorkflowJobs(ctx context.Context, limit int) ([]*model
 	}
 	return jobs, nil
 }
+
+// FindPatternsByKeywords searches for patterns where fail_cmd or fail_output contains any of the keywords.
+func (s *SQLiteStore) FindPatternsByKeywords(ctx context.Context, keywords []string, limit int) ([]*models.Pattern, error) {
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	var conditions []string
+	var args []any
+	for _, kw := range keywords {
+		conditions = append(conditions, "(fail_cmd LIKE ? OR fail_output LIKE ?)")
+		args = append(args, "%"+kw+"%", "%"+kw+"%")
+	}
+
+	q := "SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at FROM patterns WHERE " + strings.Join(conditions, " OR ") + " ORDER BY use_count DESC"
+	if limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	var patterns []*models.Pattern
+	if err := s.db.SelectContext(ctx, &patterns, q, args...); err != nil {
+		return nil, fmt.Errorf("find patterns by keywords: %w", err)
+	}
+	return patterns, nil
+}

@@ -257,6 +257,36 @@ nebula setup                    first-run config wizard
 
 ---
 
+### TASK-029: Pre-parse workflow templates at load time (DONE)
+**Severity:** medium
+**Category:** performance
+**Description:** `workflow.go:50` calls `template.New(...).Parse(promptTmpl)` inside `renderPrompt()` which is called on every workflow step execution. The same template string is parsed into an AST repeatedly. It should be parsed once when the workflow is loaded.
+
+**Details:**
+- File: `internal/workflow/workflow.go`
+- Add a `compiled map[string]*template.Template` field to the `Workflow` struct (or a local cache in `LoadFile`)
+- Parse each step's prompt template once in `LoadFile()` and store the result
+- In `renderPrompt()`, call `tmpl.Execute(&buf, data)` on the pre-parsed template instead of parsing every time
+- Add a benchmark: `go test -bench=BenchmarkRenderPrompt -benchmem ./internal/workflow/` before and after to get real numbers
+- Branch: `fix/preparse-workflow-templates`
+
+---
+
+### TASK-030: Remove or fix OPTIMIZATION.md — contains fabricated benchmark numbers (DONE)
+**Severity:** medium
+**Category:** docs
+**Description:** `OPTIMIZATION.md` claims specific benchmark figures (e.g. "28x faster", "150x reduction", `621,945 ns/op`) but no `go test -bench` was ever run. The numbers are invented. The `strings.Builder` fix is real; the template pre-parsing fix was not done (see TASK-029); the DB removal is real. The doc is misleading.
+
+**Details:**
+- After TASK-029 is done, run real benchmarks:
+  - `go test -bench=BenchmarkTokenAccumulation -benchmem ./internal/agent/`
+  - `go test -bench=BenchmarkRenderPrompt -benchmem ./internal/workflow/`
+- Update `OPTIMIZATION.md` with real measured numbers
+- Remove any claims about optimizations that weren't implemented
+- Branch: `fix/real-benchmark-numbers`
+
+---
+
 ### TASK-028: Expose PTY buffer sizes in config (DONE)
 **Severity:** low
 **Category:** architecture

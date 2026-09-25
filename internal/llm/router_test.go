@@ -384,3 +384,271 @@ func TestRouterContextWindow(t *testing.T) {
 	}
 }
 
+// chunkedProvider streams several tokens with a gap between them, so a stream
+// that gets cut short by a cancellation is observable.
+type chunkedProvider struct {
+	name   string
+	chunks []string
+	gap    time.Duration
+
+	calls atomic.Int32
+}
+
+func (p *chunkedProvider) Name() string                   { return p.name }
+func (p *chunkedProvider) Available(context.Context) bool { return true }
+
+func (p *chunkedProvider) Complete(ctx context.Context, _ Request) (<-chan Token, error) {
+	p.calls.Add(1)
+	ch := make(chan Token)
+	go func() {
+		defer close(ch)
+		for i, c := range p.chunks {
+			if i > 0 && p.gap > 0 {
+				select {
+				case <-time.After(p.gap):
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case ch <- Token{Text: c, IsLast: i == len(p.chunks)-1}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func (p *chunkedProvider) Embed(context.Context, string) ([]float32, error) {
+	return nil, errors.New("unimplemented")
+}
+
+// fanoutTestConfig enables a 2-wide race with a generous per-attempt timeout.
+func fanoutTestConfig(t *testing.T, width, timeoutSec int) {
+	t.Helper()
+	viper.Set("llm.parallel_fanout", width)
+	viper.Set("llm.timeout_seconds", timeoutSec)
+	t.Cleanup(viper.Reset)
+}
+
+func TestRouterParallelFastProviderWins(t *testing.T) {
+	fanoutTestConfig(t, 2, 30)
+
+	r := NewRouter()
+	slow := &stubProvider{name: "slow", available: true, delay: 3 * time.Second, response: "slow-ok"}
+	fast := &stubProvider{name: "fast", available: true, response: "fast-ok"}
+	r.Register(WorkloadHeal, slow)
+	r.Register(WorkloadHeal, fast)
+
+	start := time.Now()
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "fast-ok" {
+		t.Fatalf("response = %q, want the fast provider to win the race", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("fan-out took %v, want it to return as soon as the fast provider answers", elapsed)
+	}
+	if slow.calls.Load() != 1 || fast.calls.Load() != 1 {
+		t.Fatalf("provider calls slow=%d fast=%d, want both fired exactly once", slow.calls.Load(), fast.calls.Load())
+	}
+}
+
+func TestRouterParallelUsesSlowProviderWhenFastErrors(t *testing.T) {
+	fanoutTestConfig(t, 2, 30)
+
+	r := NewRouter()
+	fast := &stubProvider{name: "fast", available: true, err: errors.New("upstream boom")}
+	slow := &stubProvider{name: "slow", available: true, delay: 150 * time.Millisecond, response: "slow-ok"}
+	r.Register(WorkloadHeal, fast)
+	r.Register(WorkloadHeal, slow)
+
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "slow-ok" {
+		t.Fatalf("response = %q, want the slow provider's result after the fast one errored", got)
+	}
+	if fast.calls.Load() != 1 || slow.calls.Load() != 1 {
+		t.Fatalf("provider calls fast=%d slow=%d, want both fired exactly once", fast.calls.Load(), slow.calls.Load())
+	}
+}
+
+func TestRouterParallelSingleProviderUsesSequential(t *testing.T) {
+	fanoutTestConfig(t, 3, 30)
+
+	r := NewRouter()
+	r.Register(WorkloadHeal, &stubProvider{name: "down", available: false})
+	only := &stubProvider{name: "only", available: true, delay: 200 * time.Millisecond, response: "solo-ok"}
+	r.Register(WorkloadHeal, only)
+
+	start := time.Now()
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "solo-ok" {
+		t.Fatalf("response = %q, want the only provider's response", got)
+	}
+	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
+		t.Fatalf("sequential path returned after %v, want it to wait for the only provider", elapsed)
+	}
+	if only.calls.Load() != 1 {
+		t.Fatalf("only provider called %d times, want 1", only.calls.Load())
+	}
+}
+
+func TestRouterParallelWidthOneStaysSequential(t *testing.T) {
+	fanoutTestConfig(t, 1, 30)
+
+	r := NewRouter()
+	primary := &stubProvider{name: "primary", available: true, delay: 50 * time.Millisecond, response: "primary-ok"}
+	secondary := &stubProvider{name: "secondary", available: true, response: "secondary-ok"}
+	r.Register(WorkloadHeal, primary)
+	r.Register(WorkloadHeal, secondary)
+
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "primary-ok" {
+		t.Fatalf("response = %q, want the primary provider", got)
+	}
+	if secondary.calls.Load() != 0 {
+		t.Fatalf("secondary provider called %d times, want 0 with fan-out disabled", secondary.calls.Load())
+	}
+}
+
+func TestRouterParallelSkipsRateLimitedProvider(t *testing.T) {
+	fanoutTestConfig(t, 2, 30)
+
+	r := NewRouter()
+	throttled := &stubProvider{name: "throttled", available: true, response: "throttled-ok"}
+	healthy := &stubProvider{name: "healthy", available: true, response: "healthy-ok"}
+	r.Register(WorkloadHeal, throttled)
+	r.Register(WorkloadHeal, healthy)
+	r.startCooldown("throttled", time.Minute)
+
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "healthy-ok" {
+		t.Fatalf("response = %q, want the provider that is not rate limited", got)
+	}
+	if throttled.calls.Load() != 0 {
+		t.Fatalf("rate-limited provider called %d times, want 0", throttled.calls.Load())
+	}
+	if healthy.calls.Load() != 1 {
+		t.Fatalf("healthy provider called %d times, want 1", healthy.calls.Load())
+	}
+}
+
+func TestRouterParallelKeepsRateLimitedProviderWhenItIsTheOnlyOne(t *testing.T) {
+	fanoutTestConfig(t, 2, 30)
+
+	r := NewRouter()
+	only := &stubProvider{name: "only", available: true, response: "solo-ok"}
+	r.Register(WorkloadHeal, only)
+	r.startCooldown("only", time.Minute)
+
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "solo-ok" {
+		t.Fatalf("response = %q, want the only provider to still be tried", got)
+	}
+	if only.calls.Load() != 1 {
+		t.Fatalf("only provider called %d times, want 1", only.calls.Load())
+	}
+}
+
+func TestRouterParallelWinnerStreamSurvivesHandoff(t *testing.T) {
+	fanoutTestConfig(t, 2, 30)
+
+	r := NewRouter()
+	slow := &stubProvider{name: "slow", available: true, delay: 2 * time.Second, response: "slow-ok"}
+	winner := &chunkedProvider{name: "winner", chunks: []string{"a", "b", "c"}, gap: 25 * time.Millisecond}
+	r.Register(WorkloadHeal, slow)
+	r.Register(WorkloadHeal, winner)
+
+	tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := drainTokens(tokens); got != "abc" {
+		t.Fatalf("response = %q, want the full winning stream", got)
+	}
+	if slow.calls.Load() != 1 {
+		t.Fatalf("slow provider called %d times, want it fired then cancelled", slow.calls.Load())
+	}
+}
+
+func TestRouterParallelConcurrentComplete(t *testing.T) {
+	fanoutTestConfig(t, 2, 30)
+
+	r := NewRouter()
+	fast := &stubProvider{name: "fast", available: true, response: "fast-ok"}
+	slow := &stubProvider{name: "slow", available: true, delay: 20 * time.Millisecond, response: "slow-ok"}
+	r.Register(WorkloadHeal, fast)
+	r.Register(WorkloadHeal, slow)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tokens, err := r.Complete(context.Background(), WorkloadHeal, Request{})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if got := drainTokens(tokens); got != "fast-ok" {
+				errs <- errors.New("unexpected response: " + got)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent fan-out Complete error: %v", err)
+	}
+	if fast.calls.Load() != 10 {
+		t.Fatalf("fast provider called %d times, want 10", fast.calls.Load())
+	}
+}
+
+func TestRoutingConfig(t *testing.T) {
+	cases := []struct {
+		fanout   int
+		timeout  int
+		wantWide int
+		wantTo   time.Duration
+	}{
+		{0, 0, defaultParallelFanout, defaultTimeout},
+		{1, 5, 1, 5 * time.Second},
+		{2, 30, 2, 30 * time.Second},
+		{3, 30, maxParallelFanout, 30 * time.Second},
+		{9, 30, maxParallelFanout, 30 * time.Second},
+		{-1, -1, defaultParallelFanout, defaultTimeout},
+	}
+
+	for _, c := range cases {
+		viper.Set("llm.parallel_fanout", c.fanout)
+		viper.Set("llm.timeout_seconds", c.timeout)
+		got := routingConfig()
+		if got.ParallelFanout != c.wantWide {
+			t.Errorf("parallel_fanout=%d gave width %d, want %d", c.fanout, got.ParallelFanout, c.wantWide)
+		}
+		if got.Timeout != c.wantTo {
+			t.Errorf("timeout_seconds=%d gave timeout %v, want %v", c.timeout, got.Timeout, c.wantTo)
+		}
+	}
+	viper.Reset()
+}

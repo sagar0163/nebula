@@ -136,8 +136,9 @@ func (r *Router) route(ctx context.Context, w Workload, req Request, candidates 
 func (r *Router) fanout(ctx context.Context, w Workload, req Request, candidates []Provider, cfg RoutingConfig) (<-chan Token, error) {
 	req.Workload = w
 
+	// cancelFanout is handed to pump on the winner path; every other exit path
+	// has to release it itself, since cancelling it would kill the winner.
 	fanCtx, cancelFanout := context.WithCancel(ctx)
-	defer cancelFanout()
 
 	results := make(chan *Response, len(candidates))
 	cancels := make([]context.CancelFunc, len(candidates))
@@ -147,11 +148,13 @@ func (r *Router) fanout(ctx context.Context, w Workload, req Request, candidates
 		// siblings can be cancelled without touching the winning stream.
 		attemptCtx, cancelAttempt := context.WithCancel(fanCtx)
 		cancels[i] = cancelAttempt
-		go func(slot int, p Provider, attemptCtx context.Context) {
+		go func(slot int, p Provider, attemptCtx context.Context, cancelAttempt context.CancelFunc) {
 			res := r.attempt(attemptCtx, p, req, cfg.Timeout)
 			res.slot = slot
+			stream := res.cancel
+			res.cancel = func() { stream(); cancelAttempt() }
 			results <- res
-		}(i, p, attemptCtx)
+		}(i, p, attemptCtx, cancelAttempt)
 	}
 
 	var lastErr error
@@ -162,6 +165,7 @@ func (r *Router) fanout(ctx context.Context, w Workload, req Request, candidates
 		var res *Response
 		select {
 		case <-ctx.Done():
+			cancelFanout()
 			return nil, ctx.Err()
 		case res = <-results:
 		}
@@ -170,11 +174,13 @@ func (r *Router) fanout(ctx context.Context, w Workload, req Request, candidates
 		case res.Err != nil:
 			// Errors never end the race: the slower providers are still running.
 			// Keep the last chain-ordered call error for parity with sequential.
+			res.cancel()
 			if res.callErr && res.slot >= lastSlot {
 				lastErr, lastSlot = res.Err, res.slot
 			}
 		case res.Stream == nil:
 			// The provider answered with an empty stream: not a usable win.
+			res.cancel()
 			sawEmpty = true
 		default:
 			for i, cancel := range cancels {
@@ -186,6 +192,7 @@ func (r *Router) fanout(ctx context.Context, w Workload, req Request, candidates
 		}
 	}
 
+	cancelFanout()
 	if lastErr != nil {
 		return nil, lastErr
 	}

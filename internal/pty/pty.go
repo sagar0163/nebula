@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -51,10 +50,7 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), sentinelEnv()...)
 	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		}
-		return nil
+		return killProcessGroup(cmd)
 	}
 	cmd.WaitDelay = 3 * time.Second
 

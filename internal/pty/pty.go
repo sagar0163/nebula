@@ -70,7 +70,20 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 		defer term.Restore(int(os.Stdin.Fd()), oldState)
 
 		// Pipe stdin to PTY.
-		go func() { io.Copy(ptmx, os.Stdin) }() //nolint:errcheck
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-done:
+					return
+				case b := <-StdinBytes:
+					ptmx.Write(b)
+				}
+			}
+		}()
 	}
 
 	// Tee PTY output: → user's terminal + ring buffer.

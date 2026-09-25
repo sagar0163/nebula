@@ -20,10 +20,11 @@ import (
 
 // Step is one unit of work in a workflow.
 type Step struct {
-	Name      string   `yaml:"name"`
-	Skill     string   `yaml:"skill"`
-	Prompt    string   `yaml:"prompt"`
-	DependsOn []string `yaml:"depends_on"`
+	Name         string             `yaml:"name"`
+	Skill        string             `yaml:"skill"`
+	Prompt       string             `yaml:"prompt"`
+	DependsOn    []string           `yaml:"depends_on"`
+	ParsedPrompt *template.Template `yaml:"-"`
 }
 
 // Workflow is a named sequence of steps loaded from a YAML file.
@@ -32,7 +33,7 @@ type Workflow struct {
 	Steps []Step `yaml:"steps"`
 }
 
-// LoadFile parses a workflow YAML file.
+// LoadFile parses a workflow YAML file and pre-parses all templates.
 func LoadFile(path string) (*Workflow, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -42,6 +43,17 @@ func LoadFile(path string) (*Workflow, error) {
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil, fmt.Errorf("parse workflow: %w", err)
 	}
+	
+	// Pre-parse templates
+	for i := range wf.Steps {
+		promptTmpl := strings.ReplaceAll(wf.Steps[i].Prompt, `\n`, "\n")
+		tmpl, err := template.New(wf.Steps[i].Name).Option("missingkey=error").Parse(promptTmpl)
+		if err != nil {
+			return nil, fmt.Errorf("parse template for step %q: %w", wf.Steps[i].Name, err)
+		}
+		wf.Steps[i].ParsedPrompt = tmpl
+	}
+	
 	return &wf, nil
 }
 
@@ -51,7 +63,7 @@ func (wf *Workflow) Run(ctx context.Context, a *agent.Agent, inputs map[string]s
 	outputs := make(map[string]string)
 
 	for _, step := range wf.Steps {
-		prompt, err := renderPrompt(step.Prompt, inputs, outputs)
+		prompt, err := renderPrompt(step.ParsedPrompt, inputs, outputs)
 		if err != nil {
 			return outputs, fmt.Errorf("step %q: render prompt: %w", step.Name, err)
 		}
@@ -74,14 +86,10 @@ func (wf *Workflow) Run(ctx context.Context, a *agent.Agent, inputs map[string]s
 	return outputs, nil
 }
 
-// renderPrompt executes the prompt as a Go template with inputs and prior outputs.
-func renderPrompt(promptTmpl string, inputs, outputs map[string]string) (string, error) {
-	// Unescape literal \n sequences in YAML scalars.
-	promptTmpl = strings.ReplaceAll(promptTmpl, `\n`, "\n")
-
-	tmpl, err := template.New("prompt").Option("missingkey=error").Parse(promptTmpl)
-	if err != nil {
-		return "", err
+// renderPrompt executes the pre-parsed Go template with inputs and prior outputs.
+func renderPrompt(tmpl *template.Template, inputs, outputs map[string]string) (string, error) {
+	if tmpl == nil {
+		return "", fmt.Errorf("template is nil")
 	}
 	data := map[string]any{
 		"input":  inputs,
@@ -138,7 +146,7 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 			job.CurrentStep = step.Name
 			updateJob(false)
 
-			prompt, err := renderPrompt(step.Prompt, inputs, outputs)
+			prompt, err := renderPrompt(step.ParsedPrompt, inputs, outputs)
 			if err != nil {
 				job.Status = "failed"
 				job.Error = fmt.Sprintf("step %q: render prompt: %v", step.Name, err)

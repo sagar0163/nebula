@@ -49,13 +49,14 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string) 
 		return nil, err
 	}
 
-	var response string
+	var builder strings.Builder
 	for t := range tokens {
 		if t.Err != nil {
 			return nil, t.Err
 		}
-		response += t.Text
+		builder.WriteString(t.Text)
 	}
+	response := builder.String()
 
 	return parseSuggestion(cmd, response), nil
 }

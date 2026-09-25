@@ -61,7 +61,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		return nil, fmt.Errorf("no command provided")
 	}
 
-	raw := joinArgs(args)
+	raw := strings.Join(args, " ")
 	result := &RunResult{Command: raw}
 
 	// 1. Classify and check permission.
@@ -179,16 +179,17 @@ func (a *Agent) Ask(ctx context.Context, input string, stream bool) (string, err
 		return "", err
 	}
 
-	var response string
+	var builder strings.Builder
 	for t := range tokens {
 		if t.Err != nil {
 			return "", t.Err
 		}
-		response += t.Text
+		builder.WriteString(t.Text)
 		if stream {
 			fmt.Print(t.Text)
 		}
 	}
+	response := builder.String()
 	if stream {
 		fmt.Println()
 	}
@@ -211,16 +212,6 @@ type RunOptions struct {
 	ApprovalFn func(cmd string, risk safety.Risk) bool
 }
 
-func joinArgs(args []string) string {
-	result := ""
-	for i, a := range args {
-		if i > 0 {
-			result += " "
-		}
-		result += a
-	}
-	return result
-}
 
 const systemPrompt = `You are Nebula, a self-healing terminal agent.
 Your job is to analyze failed shell commands and suggest precise fixes.

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/sagar0163/nebula/internal/memory"
@@ -47,7 +48,7 @@ func TestRunBackgroundPanicRecovery(t *testing.T) {
 		Steps: []Step{
 			{
 				Name:   "step1",
-				Prompt: "do something",
+				Prompt: "do something", ParsedPrompt: template.Must(template.New("").Parse("do something")),
 			},
 		},
 	}

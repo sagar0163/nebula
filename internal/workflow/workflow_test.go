@@ -9,6 +9,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/sagar0163/nebula/internal/agent"
@@ -56,7 +57,8 @@ func TestLoadFileMissing(t *testing.T) {
 }
 
 func TestRenderPrompt(t *testing.T) {
-	out, err := renderPrompt(`Write about {{index .input "topic"}} then revise {{index .output "prev"}}`,
+	tmpl, _ := template.New("t").Option("missingkey=error").Parse(`Write about {{index .input "topic"}} then revise {{index .output "prev"}}`)
+	out, err := renderPrompt(tmpl,
 		map[string]string{"topic": "go"}, map[string]string{"prev": "the intro"})
 	if err != nil {
 		t.Fatalf("renderPrompt: %v", err)
@@ -68,7 +70,8 @@ func TestRenderPrompt(t *testing.T) {
 }
 
 func TestRenderPromptUnknownVar(t *testing.T) {
-	out, err := renderPrompt(`{{.missing}}`, map[string]string{}, map[string]string{})
+	tmpl, _ := template.New("t").Option("missingkey=error").Parse(`{{.missing}}`)
+	out, err := renderPrompt(tmpl, map[string]string{}, map[string]string{})
 	if err == nil {
 		t.Fatalf("renderPrompt(unknown var) returned a nil error, out=%q", out)
 	}
@@ -97,7 +100,14 @@ func TestRenderPromptChaos(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := renderPrompt(c.tmpl, c.inputs, c.outputs)
+			tmpl, err := template.New("t").Option("missingkey=error").Parse(strings.ReplaceAll(c.tmpl, `\n`, "\n"))
+			if err != nil {
+				if c.wantErr {
+					return
+				}
+				t.Fatalf("parse: %v", err)
+			}
+			got, err := renderPrompt(tmpl, c.inputs, c.outputs)
 			if c.wantErr {
 				if err == nil {
 					t.Fatalf("renderPrompt(%q) returned nil error, out=%q", c.tmpl, got)
@@ -214,7 +224,8 @@ func TestRenderPrompt500VarsDefined(t *testing.T) {
 		want.WriteString(val)
 		want.WriteByte(' ')
 	}
-	got, err := renderPrompt(tmpl.String(), inputs, nil)
+	parsedTmpl, _ := template.New("t").Option("missingkey=error").Parse(tmpl.String())
+	got, err := renderPrompt(parsedTmpl, inputs, nil)
 	if err != nil {
 		t.Fatalf("renderPrompt(500 vars defined): %v", err)
 	}
@@ -228,7 +239,8 @@ func TestRenderPrompt500VarsUndefined(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		tmpl.WriteString(fmt.Sprintf("{{.input.v%d}} ", i))
 	}
-	_, err := renderPrompt(tmpl.String(), nil, nil)
+	parsedTmpl, _ := template.New("t").Option("missingkey=error").Parse(tmpl.String())
+	_, err := renderPrompt(parsedTmpl, nil, nil)
 	if err == nil {
 		t.Fatal("renderPrompt(500 undefined vars) returned nil error, want missingkey error")
 	}
@@ -245,7 +257,8 @@ func TestRenderPrompt500VarsUndefinedIndexGraceful(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		tmpl.WriteString(fmt.Sprintf("[{{index .input %q}}]", fmt.Sprintf("gone%d", i)))
 	}
-	out, err := renderPrompt(tmpl.String(), map[string]string{}, nil)
+	parsedTmpl, _ := template.New("t").Option("missingkey=error").Parse(tmpl.String())
+	out, err := renderPrompt(parsedTmpl, map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("renderPrompt(index missing 500 vars): %v", err)
 	}
@@ -329,7 +342,8 @@ func TestRenderPromptConcurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				got, err := renderPrompt(tmpl, map[string]string{"topic": "go"}, map[string]string{"prev": "intro"})
+				parsedTmpl, _ := template.New("t").Option("missingkey=error").Parse(tmpl)
+				got, err := renderPrompt(parsedTmpl, map[string]string{"topic": "go"}, map[string]string{"prev": "intro"})
 				if err != nil {
 					errs <- err
 					return

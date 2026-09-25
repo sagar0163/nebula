@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 
@@ -60,6 +61,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, req llm.Request) (<-chan 
 			Model:  model,
 			Prompt: prompt,
 			Stream: boolPtr(true),
+			Format: jsonFormat(req),
 		}, func(resp ollamaapi.GenerateResponse) error {
 			select {
 			case <-ctx.Done():
@@ -141,3 +143,13 @@ func buildPrompt(req llm.Request) string {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// jsonFormat returns the Ollama "format" hint for the requested response
+// format. Ollama takes the literal string "json" (or a JSON schema); any other
+// value means unconstrained output and yields a nil (omitted) field.
+func jsonFormat(req llm.Request) json.RawMessage {
+	if req.ResponseFormat != "json" {
+		return nil
+	}
+	return json.RawMessage(`"json"`)
+}

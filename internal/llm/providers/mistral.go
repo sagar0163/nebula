@@ -63,6 +63,7 @@ func (p *MistralProvider) Complete(ctx context.Context, req llm.Request) (<-chan
 	if req.Temperature > 0 {
 		params.Temperature = openai.Float(req.Temperature)
 	}
+	applyResponseFormat(&params, req)
 
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 

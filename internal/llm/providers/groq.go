@@ -6,6 +6,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 	"github.com/sagar0163/nebula/internal/llm"
 )
 
@@ -62,6 +63,7 @@ func (p *GroqProvider) Complete(ctx context.Context, req llm.Request) (<-chan ll
 	if req.Temperature > 0 {
 		params.Temperature = openai.Float(req.Temperature)
 	}
+	applyResponseFormat(&params, req)
 
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 
@@ -133,4 +135,17 @@ func buildOpenAIMessages(req llm.Request) []openai.ChatCompletionMessageParamUni
 		}
 	}
 	return msgs
+}
+
+// applyResponseFormat constrains an OpenAI-compatible chat completion to a JSON
+// object. Only "json" is mapped; any other value (including empty) leaves the
+// completion unconstrained. Callers must still tolerate free-form output since
+// a provider may reject or ignore the hint.
+func applyResponseFormat(params *openai.ChatCompletionNewParams, req llm.Request) {
+	if req.ResponseFormat != "json" {
+		return
+	}
+	params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONObject: &shared.ResponseFormatJSONObjectParam{Type: "json_object"},
+	}
 }

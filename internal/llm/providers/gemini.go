@@ -59,6 +59,9 @@ func (p *GeminiProvider) Complete(ctx context.Context, req llm.Request) (<-chan 
 		t := float32(req.Temperature)
 		model.Temperature = &t
 	}
+	if req.ResponseFormat == "json" {
+		model.ResponseMIMEType = "application/json"
+	}
 
 	parts := toGeminiParts(req.Messages)
 	iter := model.GenerateContentStream(ctx, parts...)

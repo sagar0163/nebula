@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/memory"
@@ -83,6 +84,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 	}
 
 	// 3. Execute through PTY harness.
+	start := time.Now()
 	cmdResult, err := a.harness.Run(ctx, args[0], args[1:])
 	if err != nil {
 		return nil, fmt.Errorf("execution error: %w", err)
@@ -94,6 +96,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		Raw:      raw,
 		ExitCode: cmdResult.ExitCode,
 		Stdout:   string(cmdResult.Stdout),
+		Elapsed:  time.Since(start).Milliseconds(),
 	}); err != nil {
 		log.Printf("warn: save command: %v", err)
 	}

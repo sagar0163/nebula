@@ -152,9 +152,31 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		}
 
 		if fixResult != nil && fixResult.ExitCode == 0 {
-			result.Healed = true
-			result.HealApply = suggestion
-			break
+			verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			verifyResult, vErr := a.harness.Run(verifyCtx, args[0], args[1:])
+			cancel()
+			
+			if vErr == nil && verifyResult.ExitCode == 0 {
+				result.Healed = true
+				result.HealApply = suggestion
+				if err := a.executor.LearnPattern(ctx, suggestion.OriginalCmd, string(cmdResult.Stdout), suggestion.FixCmd); err != nil {
+					log.Printf("warn: learnPattern: %v", err)
+				}
+				break
+			} else if vErr == nil && verifyResult.ExitCode != 0 {
+				newOutput := string(verifyResult.Stdout)
+				if newOutput == string(cmdResult.Stdout) {
+					break
+				}
+				history = append(history, models.TurnRecord{
+					FixCmd:   suggestion.FixCmd + " (applied, but original command still failed)",
+					Output:   newOutput,
+					ExitCode: verifyResult.ExitCode,
+				})
+				cmdResult = verifyResult
+			} else {
+				break
+			}
 		} else if fixResult != nil && fixResult.ExitCode != 0 {
 			newOutput := string(fixResult.Stdout)
 			if newOutput == string(cmdResult.Stdout) {

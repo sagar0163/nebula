@@ -585,7 +585,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-050: Semantic fix verification — re-run original command after fix
+### TASK-050: Semantic fix verification — re-run original command after fix (DONE)
 **Severity:** high
 **Category:** fix accuracy
 **Description:** Today "success" means the fix command exited 0. But `git config --global user.email "x"` exits 0 even if the original failing command was `go build` — the underlying problem may be unchanged. After applying a fix, re-run the original failing command and use its result (not the fix command's result) as ground truth for success/failure.

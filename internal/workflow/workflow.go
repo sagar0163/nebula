@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"text/template"
@@ -112,24 +113,36 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 
 	go func() {
 		bgCtx := context.Background()
+
+		updateJob := func(terminal bool) {
+			if err := store.UpdateWorkflowJob(bgCtx, job); err != nil {
+				log.Printf("warn: update workflow job %s: %v", job.ID, err)
+				if terminal {
+					if err2 := store.UpdateWorkflowJob(bgCtx, job); err2 != nil {
+						log.Printf("warn: retry update workflow job %s: %v", job.ID, err2)
+					}
+				}
+			}
+		}
+
 		defer func() {
 			if r := recover(); r != nil {
 				job.Status = "failed"
 				job.Error = fmt.Sprintf("panic: %v", r)
-				_ = store.UpdateWorkflowJob(bgCtx, job)
+				updateJob(true)
 			}
 		}()
 		outputs := make(map[string]string)
 
 		for _, step := range wf.Steps {
 			job.CurrentStep = step.Name
-			_ = store.UpdateWorkflowJob(bgCtx, job)
+			updateJob(false)
 
 			prompt, err := renderPrompt(step.Prompt, inputs, outputs)
 			if err != nil {
 				job.Status = "failed"
 				job.Error = fmt.Sprintf("step %q: render prompt: %v", step.Name, err)
-				_ = store.UpdateWorkflowJob(bgCtx, job)
+				updateJob(true)
 				return
 			}
 
@@ -144,19 +157,19 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 			if err != nil {
 				job.Status = "failed"
 				job.Error = fmt.Sprintf("step %q: %v", step.Name, err)
-				_ = store.UpdateWorkflowJob(bgCtx, job)
+				updateJob(true)
 				return
 			}
 			outputs[step.Name] = out
 
 			outBytes, _ := json.Marshal(outputs)
 			job.Output = string(outBytes)
-			_ = store.UpdateWorkflowJob(bgCtx, job)
+			updateJob(false)
 		}
 
 		job.Status = "done"
 		job.CurrentStep = ""
-		_ = store.UpdateWorkflowJob(bgCtx, job)
+		updateJob(true)
 	}()
 
 	return job.ID, nil

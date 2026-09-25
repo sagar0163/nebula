@@ -132,7 +132,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 	router.Register(llm.WorkloadDiagnose, stubProvider{response: "FIX: echo ok\nEXPLANATION: works"})
 
 	planner := NewPlanner(router, newTestStore(t))
-	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom", "")
+	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom", "", nil)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 	executor := NewExecutor(pty.NewHarness(0, 512*1024), router, newTestStore(t))
 	approved := false
 	approver := func(cmd string, _ safety.Risk) bool { approved = true; return false }
-	if err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
+	if _, err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !approved {
@@ -165,7 +165,7 @@ func TestExecutorRejectsDangerousFixCmd(t *testing.T) {
 	}
 
 	sugg := &models.HealSuggestion{FixCmd: "rm -rf /"}
-	if err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
+	if _, err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if gotRisk != safety.RiskHigh && gotRisk != safety.RiskDangerous {
@@ -193,7 +193,7 @@ func TestExecutorRejectsShellMetacharacters(t *testing.T) {
 			approverCalled = true
 			return true
 		}
-		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
+		_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
 		if err == nil || !strings.Contains(err.Error(), "shell metacharacters") {
 			t.Errorf("FixCmd %q: err = %v, want error containing 'shell metacharacters'", fix, err)
 		}
@@ -206,7 +206,7 @@ func TestExecutorRejectsShellMetacharacters(t *testing.T) {
 func TestExecutorRejectsEmptyFixCmd(t *testing.T) {
 	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	for _, fix := range []string{"", "   "} {
-		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+		_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
 			func(string, safety.Risk) bool { return true })
 		if err == nil || !strings.Contains(err.Error(), "fix command is empty") {
 			t.Errorf("FixCmd %q: err = %v, want error containing 'fix command is empty'", fix, err)
@@ -229,7 +229,7 @@ func TestExecutorRiskClassification(t *testing.T) {
 			got = r
 			return false
 		}
-		if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: c.fix}, "boom", approver); err != nil {
+		if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: c.fix}, "boom", approver); err != nil {
 			t.Fatalf("FixCmd %q: Execute: %v", c.fix, err)
 		}
 		if got != c.want {
@@ -247,7 +247,7 @@ func TestExecutorUserRejectionSkipsHarnessRun(t *testing.T) {
 		calls++
 		return false
 	}
-	if err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
+	if _, err := executor.Execute(context.Background(), sugg, "boom", approver); err != nil {
 		t.Fatalf("Execute on rejected fix: %v (harness ran despite rejection?)", err)
 	}
 	if calls != 1 {
@@ -346,7 +346,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	// diagnose() scrubs before building the prompt, so secrets never reach the
 	// LLM. This test asserts the fixed behaviour: the outbound request must not
 	// contain the raw secrets.
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "")
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "", nil)
 	for _, secret := range []string{"sk-abc123xyz456789012345", "AKIAIOSFODNN7EXAMPLE123"} {
 		if strings.Contains(prompt, secret) {
 			t.Errorf("scrubbed prompt still contains %q", secret)
@@ -357,7 +357,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, rec)
 	planner := NewPlanner(router, newTestStore(t))
-	sugg, err := planner.Plan(context.Background(), failCmd, failOut, "")
+	sugg, err := planner.Plan(context.Background(), failCmd, failOut, "", nil)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestDiagnosePromptStripsANSI(t *testing.T) {
 	failOut := "\x1b[31;1m--- FAIL: TestExample (0.01s)\x1b[0m\n    example_test.go:10: \x1b[33munexpected value\x1b[0m"
 	transcript := "\x1b]0;Title\x07\x1b[2KRunning..."
 
-	prompt := buildDiagnosePrompt(failCmd, failOut, transcript)
+	prompt := buildDiagnosePrompt(failCmd, failOut, transcript, nil)
 	if strings.Contains(prompt, "\x1b[") || strings.Contains(prompt, "\x1b]") {
 		t.Fatalf("buildDiagnosePrompt contains unstripped ANSI sequences: %q", prompt)
 	}
@@ -445,7 +445,7 @@ func TestExecutorRejectsEveryMetacharacterIndividually(t *testing.T) {
 			called = true
 			return true
 		}
-		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
+		_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
 		if err == nil || !strings.Contains(err.Error(), "shell metacharacters") {
 			t.Errorf("FixCmd %q: err = %v, want 'shell metacharacters' rejection", fix, err)
 		}
@@ -479,7 +479,7 @@ func TestExecutorUnicodeMetacharLookalikesPassThrough(t *testing.T) {
 			called = true
 			return false // reject so no harness run is needed
 		}
-		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
+		_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
 		if err != nil {
 			t.Errorf("%s (U+%04X) in %q: err = %v, want pass-through (not a shell metacharacter)", name, r, fix, err)
 		}
@@ -493,7 +493,7 @@ func TestExecutorWhitespaceOnlyFixCommands(t *testing.T) {
 	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
 	whitespaceOnly := []string{"", "   ", "\t", "\n", "\t \n ", " \u00a0\u3000 ", "\r\n"}
 	for _, fix := range whitespaceOnly {
-		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+		_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
 			func(string, safety.Risk) bool { return true })
 		if err == nil || !strings.Contains(err.Error(), "fix command is empty") {
 			t.Errorf("FixCmd %q: err = %v, want 'fix command is empty'", fix, err)
@@ -507,13 +507,13 @@ func TestExecutorNullBytesInFixCmd(t *testing.T) {
 	fix := "echo\x00rm -rf /"
 
 	// Rejected fix: no exec attempted, no crash.
-	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+	if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
 		func(string, safety.Risk) bool { return false }); err != nil {
 		t.Fatalf("Execute(rejected NUL fix) = %v, want nil", err)
 	}
 
 	// Approved fix: the NUL-embedded binary name must fail cleanly, not panic.
-	err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+	_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
 		func(string, safety.Risk) bool { return true })
 	if err == nil {
 		t.Fatal("Execute(approved NUL fix) returned nil error, want exec failure")
@@ -525,12 +525,12 @@ func TestExecutorFixCmd10000Chars(t *testing.T) {
 	executor := NewExecutor(pty.NewHarness(1<<20, 512*1024), llm.NewRouter(), newTestStore(t))
 	long := "echo " + strings.Repeat("x", 10000)
 
-	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: long}, "boom",
+	if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: long}, "boom",
 		func(string, safety.Risk) bool { return false }); err != nil {
 		t.Fatalf("Execute(rejected 10k-char fix) = %v, want nil", err)
 	}
 
-	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: long}, "boom",
+	if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: long}, "boom",
 		func(string, safety.Risk) bool { return true }); err != nil {
 		t.Fatalf("Execute(approved 10k-char fix) = %v", err)
 	}
@@ -548,12 +548,12 @@ func TestExecutorApprovalFnPanicsRecoverable(t *testing.T) {
 				t.Fatalf("recovered %v, want 'approval exploded'", r)
 			}
 		}()
-		_ = executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom", panicker)
+		_, _ = executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom", panicker)
 	}()
 
 	// The executor must remain usable after the panic.
 	calls := 0
-	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
+	if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
 		func(string, safety.Risk) bool { calls++; return false }); err != nil {
 		t.Fatalf("Execute after panic: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestExecutorApprovalFnCalledExactlyOnce(t *testing.T) {
 
 	t.Run("approved run consults approvalFn exactly once", func(t *testing.T) {
 		calls := 0
-		if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
+		if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
 			func(string, safety.Risk) bool { calls++; return true }); err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
@@ -579,7 +579,7 @@ func TestExecutorApprovalFnCalledExactlyOnce(t *testing.T) {
 
 	t.Run("rejected run consults approvalFn exactly once", func(t *testing.T) {
 		calls := 0
-		if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
+		if _, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
 			func(string, safety.Risk) bool { calls++; return false }); err != nil {
 			t.Fatalf("Execute: %v", err)
 		}

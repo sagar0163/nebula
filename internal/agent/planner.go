@@ -24,7 +24,7 @@ func NewPlanner(router *llm.Router, store memory.Store) *Planner {
 	}
 }
 
-func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string) (*models.HealSuggestion, error) {
+func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string, history []models.TurnRecord) (*models.HealSuggestion, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -33,7 +33,7 @@ func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string) 
 		return recalled, nil
 	}
 
-	return p.diagnose(ctx, failCmd, output, transcript)
+	return p.diagnose(ctx, failCmd, output, transcript, history)
 }
 
 func (p *Planner) budgetOutput(ctx context.Context, output string) string {
@@ -70,9 +70,9 @@ func (p *Planner) budgetOutput(ctx context.Context, output string) string {
 	return head + marker + tail
 }
 
-func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string) (*models.HealSuggestion, error) {
+func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, history []models.TurnRecord) (*models.HealSuggestion, error) {
 	output = p.budgetOutput(ctx, output)
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript))
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript), history)
 	req := llm.Request{
 		SystemPrompt: systemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
@@ -110,7 +110,7 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 	}, nil
 }
 
-func buildDiagnosePrompt(cmd, output, transcript string) string {
+func buildDiagnosePrompt(cmd, output, transcript string, history []models.TurnRecord) string {
 	output = SummarizeOutput(output)
 	output = pty.StripANSI(output)
 	transcript = pty.StripANSI(transcript)
@@ -130,6 +130,13 @@ Output:
 
 	if transcript != "" {
 		prompt += fmt.Sprintf("\nRecent Terminal Context:\n%s\n", transcript)
+	}
+
+	if len(history) > 0 {
+		prompt += "\nPreviously Tried Fixes:\n"
+		for i, h := range history {
+			prompt += fmt.Sprintf("Attempt %d: %s\nFailed with (Exit %d):\n%s\n\n", i+1, h.FixCmd, h.ExitCode, SummarizeOutput(pty.StripANSI(h.Output)))
+		}
 	}
 
 	prompt += `

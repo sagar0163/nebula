@@ -554,7 +554,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-048: Multi-turn reasoning loop — retry with history on fix failure
+### TASK-048: Multi-turn reasoning loop — retry with history on fix failure (DONE)
 **Severity:** critical
 **Category:** fix accuracy
 **Description:** Today the agent makes one LLM call per fix attempt. If the fix is wrong and the command fails again, the agent starts from scratch with no memory of what was tried. This is the single biggest gap vs. Claude Code and OpenHands. A 3-turn reasoning loop where the LLM sees "I tried X, it failed with Y, now suggest Z" would dramatically improve fix accuracy on real-world multi-step failures.

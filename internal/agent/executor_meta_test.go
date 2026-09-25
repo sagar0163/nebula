@@ -42,7 +42,7 @@ func TestExecutorAllowsQuotedMetas(t *testing.T) {
 		approver := func(string, safety.Risk) bool {
 			return false // skip execution
 		}
-		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
+		_, err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
 		if err != nil {
 			t.Errorf("FixCmd %q: expected no error (should pass metacharacter check), got %v", fix, err)
 		}

@@ -85,3 +85,10 @@ type WorkflowJob struct {
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }
+
+// TurnRecord represents a single reasoning turn in a multi-turn healing loop.
+type TurnRecord struct {
+	FixCmd   string
+	Output   string
+	ExitCode int
+}

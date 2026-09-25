@@ -56,26 +56,26 @@ func containsUnquotedMeta(s string) bool {
 	return false
 }
 
-func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestion, failOutput string, approvalFn func(string, safety.Risk) bool) error {
+func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestion, failOutput string, approvalFn func(string, safety.Risk) bool) (*pty.CommandResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if strings.TrimSpace(suggestion.FixCmd) == "" {
-		return errors.New("fix command is empty")
+		return nil, errors.New("fix command is empty")
 	}
 	args, err := shlex.Split(suggestion.FixCmd)
 	if err != nil {
-		return fmt.Errorf("parse fix command: %w", err)
+		return nil, fmt.Errorf("parse fix command: %w", err)
 	}
 	if len(args) == 0 {
-		return errors.New("fix command is empty")
+		return nil, errors.New("fix command is empty")
 	}
 	if containsUnquotedMeta(suggestion.FixCmd) {
-		return errors.New("fix command contains shell metacharacters — manual review required")
+		return nil, errors.New("fix command contains shell metacharacters — manual review required")
 	}
 
 	if !approvalFn(suggestion.FixCmd, safety.Classify(suggestion.FixCmd)) {
-		return nil
+		return nil, nil
 	}
 
 	fixResult, err := e.harness.Run(ctx, args[0], args[1:])
@@ -83,7 +83,7 @@ func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestio
 		if err := e.learnPattern(ctx, suggestion.OriginalCmd, failOutput, suggestion.FixCmd); err != nil { log.Printf("warn: learnPattern: %v", err) }
 	}
 
-	return err
+	return fixResult, err
 }
 
 func (e *Executor) learnPattern(ctx context.Context, failCmd, failOutput, fixCmd string) error {

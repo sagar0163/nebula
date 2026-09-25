@@ -104,8 +104,8 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 	// On success the doom-loop fingerprint is reset so a healed state does
 	// not carry stale failure counts into future runs.
 	if cmdResult.ExitCode == 0 {
-		outHash := sha256.Sum256(cmdResult.Stdout)
-		fingerprint := fmt.Sprintf("%s:%x", raw, outHash[:8])
+		outHash := sha256.Sum256(append([]byte(raw), cmdResult.Stdout...))
+		fingerprint := fmt.Sprintf("%x", outHash[:8])
 		a.doomMu.Lock()
 		delete(a.doomLoopCounts, fingerprint)
 		a.doomMu.Unlock()
@@ -113,8 +113,8 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 
 	// 5. On failure, attempt healing.
 	if cmdResult.ExitCode != 0 {
-		outHash := sha256.Sum256(cmdResult.Stdout)
-		fingerprint := fmt.Sprintf("%s:%x", raw, outHash[:8])
+		outHash := sha256.Sum256(append([]byte(raw), cmdResult.Stdout...))
+		fingerprint := fmt.Sprintf("%x", outHash[:8])
 
 		a.doomMu.Lock()
 		count := a.doomLoopCounts[fingerprint]

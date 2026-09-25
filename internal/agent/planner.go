@@ -62,7 +62,7 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string) 
 }
 
 func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string) (*models.HealSuggestion, error) {
-	pattern, err := p.store.FindPatternByCmd(ctx, failCmd)
+	pattern, err := p.store.FindPattern(ctx, failCmd, failOutput)
 	if err != nil || pattern == nil {
 		return nil, nil
 	}
@@ -75,6 +75,11 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 }
 
 func buildDiagnosePrompt(cmd, output, transcript string) string {
+	output = strings.ReplaceAll(output, "FIX:", "F-I-X:")
+	output = strings.ReplaceAll(output, "EXPLANATION:", "E-X-P-L-A-N-A-T-I-O-N:")
+	transcript = strings.ReplaceAll(transcript, "FIX:", "F-I-X:")
+	transcript = strings.ReplaceAll(transcript, "EXPLANATION:", "E-X-P-L-A-N-A-T-I-O-N:")
+
 	prompt := fmt.Sprintf(`A shell command failed. Diagnose the error and suggest a fix.
 
 Command: %s

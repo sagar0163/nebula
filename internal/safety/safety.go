@@ -80,6 +80,15 @@ func Classify(cmd string) Risk {
 			return RiskDangerous
 		}
 	}
+	
+	// TASK-034: Block script file execution as Dangerous
+	// If it starts with an interpreter and looks like a script file execution
+	scriptInterpreters := []string{"python ", "python3 ", "node ", "ruby ", "perl ", "bash ", "sh ", "zsh ", "fish "}
+	for _, interpreter := range scriptInterpreters {
+		if strings.HasPrefix(cmd, interpreter) && (strings.Contains(cmd, ".py") || strings.Contains(cmd, ".js") || strings.Contains(cmd, ".rb") || strings.Contains(cmd, ".sh") || strings.Contains(cmd, ".pl")) {
+			return RiskDangerous
+		}
+	}
 
 	for _, d := range destructivePatterns {
 		if strings.Contains(cmd, d) {
@@ -88,9 +97,9 @@ func Classify(cmd string) Risk {
 	}
 
 	for _, ro := range readOnlyPrefixes {
-		if strings.HasPrefix(cmd, ro) {
+		if cmd == ro || strings.HasPrefix(cmd, ro+" ") {
 			// find commands can have side effects
-			if strings.HasPrefix(cmd, "find") || strings.HasPrefix(cmd, "find ") {
+			if ro == "find" {
 				if strings.Contains(cmd, "-exec") || strings.Contains(cmd, "-execdir") || strings.Contains(cmd, "-delete") {
 					return RiskDangerous
 				}

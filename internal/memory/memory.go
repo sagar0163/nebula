@@ -21,7 +21,7 @@ type Store interface {
 
 	// Pattern learning
 	SavePattern(ctx context.Context, p *models.Pattern) error
-	FindPatternByCmd(ctx context.Context, failCmd string) (*models.Pattern, error)
+	FindPattern(ctx context.Context, failCmd, failOutput string) (*models.Pattern, error)
 
 
 	// General tasks

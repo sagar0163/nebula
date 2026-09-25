@@ -198,7 +198,7 @@ func TestSaveCommandChaos(t *testing.T) {
 	})
 }
 
-func TestFindPatternByCmdChaos(t *testing.T) {
+func TestFindPatternChaos(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	embed := []byte{1, 2, 3}
@@ -208,12 +208,12 @@ func TestFindPatternByCmdChaos(t *testing.T) {
 	}
 
 	t.Run("no patterns", func(t *testing.T) {
-		p, err := s.FindPatternByCmd(ctx, "anything")
+		p, err := s.FindPattern(ctx, "anything", "")
 		if err != nil {
-			t.Fatalf("FindPatternByCmd(empty store): %v", err)
+			t.Fatalf("FindPattern(empty store): %v", err)
 		}
 		if p != nil {
-			t.Fatalf("FindPatternByCmd(empty store) = %+v, want nil", p)
+			t.Fatalf("FindPattern(empty store) = %+v, want nil", p)
 		}
 	})
 
@@ -221,12 +221,12 @@ func TestFindPatternByCmdChaos(t *testing.T) {
 		if err := s.SavePattern(ctx, pattern("docker compose up", "docker compose up --scale 2", 3)); err != nil {
 			t.Fatalf("SavePattern: %v", err)
 		}
-		p, err := s.FindPatternByCmd(ctx, "docker compose up")
+		p, err := s.FindPattern(ctx, "docker compose up", "")
 		if err != nil {
-			t.Fatalf("FindPatternByCmd: %v", err)
+			t.Fatalf("FindPattern: %v", err)
 		}
 		if p == nil || p.FixCmd != "docker compose up --scale 2" {
-			t.Fatalf("FindPatternByCmd = %+v, want exact-match pattern", p)
+			t.Fatalf("FindPattern = %+v, want exact-match pattern", p)
 		}
 	})
 
@@ -234,12 +234,12 @@ func TestFindPatternByCmdChaos(t *testing.T) {
 		if err := s.SavePattern(ctx, pattern("Git Status", "git status --short", 5)); err != nil {
 			t.Fatalf("SavePattern: %v", err)
 		}
-		p, err := s.FindPatternByCmd(ctx, "git status")
+		p, err := s.FindPattern(ctx, "git status", "")
 		if err != nil {
-			t.Fatalf("FindPatternByCmd: %v", err)
+			t.Fatalf("FindPattern: %v", err)
 		}
 		if p != nil {
-			t.Fatalf("FindPatternByCmd(lowercase) = %+v, want nil (case-sensitive)", p)
+			t.Fatalf("FindPattern(lowercase) = %+v, want nil (case-sensitive)", p)
 		}
 	})
 
@@ -247,12 +247,12 @@ func TestFindPatternByCmdChaos(t *testing.T) {
 		if err := s.SavePattern(ctx, pattern("git status --porcelain", "x", 2)); err != nil {
 			t.Fatalf("SavePattern: %v", err)
 		}
-		p, err := s.FindPatternByCmd(ctx, "git status")
+		p, err := s.FindPattern(ctx, "git status", "")
 		if err != nil {
-			t.Fatalf("FindPatternByCmd: %v", err)
+			t.Fatalf("FindPattern: %v", err)
 		}
 		if p != nil {
-			t.Fatalf("FindPatternByCmd(substring) = %+v, want nil (exact match only)", p)
+			t.Fatalf("FindPattern(substring) = %+v, want nil (exact match only)", p)
 		}
 	})
 
@@ -263,12 +263,12 @@ func TestFindPatternByCmdChaos(t *testing.T) {
 		if err := s.SavePattern(ctx, pattern("flakey cmd", "fix-high", 10)); err != nil {
 			t.Fatalf("SavePattern high: %v", err)
 		}
-		p, err := s.FindPatternByCmd(ctx, "flakey cmd")
+		p, err := s.FindPattern(ctx, "flakey cmd", "")
 		if err != nil {
-			t.Fatalf("FindPatternByCmd: %v", err)
+			t.Fatalf("FindPattern: %v", err)
 		}
 		if p == nil || p.FixCmd != "fix-high" {
-			t.Fatalf("FindPatternByCmd = %+v, want highest use_count pattern", p)
+			t.Fatalf("FindPattern = %+v, want highest use_count pattern", p)
 		}
 	})
 
@@ -283,8 +283,8 @@ func TestFindPatternByCmdChaos(t *testing.T) {
 					if err := s.SavePattern(ctx, pattern(failCmd, "fix", 1)); err != nil {
 						t.Errorf("concurrent SavePattern: %v", err)
 					}
-					if _, err := s.FindPatternByCmd(ctx, failCmd); err != nil {
-						t.Errorf("concurrent FindPatternByCmd: %v", err)
+					if _, err := s.FindPattern(ctx, failCmd, ""); err != nil {
+						t.Errorf("concurrent FindPattern: %v", err)
 					}
 				}
 			}(i)
@@ -416,7 +416,7 @@ func TestSaveCommandDuplicate(t *testing.T) {
 	}
 }
 
-func TestFindPatternByCmdSqlWildcards(t *testing.T) {
+func TestFindPatternSqlWildcards(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -425,45 +425,45 @@ func TestFindPatternByCmdSqlWildcards(t *testing.T) {
 		t.Fatalf("SavePattern(wildcard cmd): %v", err)
 	}
 	// A command full of LIKE metacharacters must round-trip by exact match.
-	got, err := s.FindPatternByCmd(ctx, wild)
+	got, err := s.FindPattern(ctx, wild, "")
 	if err != nil {
-		t.Fatalf("FindPatternByCmd(wildcards): %v", err)
+		t.Fatalf("FindPattern(wildcards): %v", err)
 	}
 	if got == nil || got.FixCmd != "fix" {
-		t.Fatalf("FindPatternByCmd(wildcards) = %+v, want exact-match row", got)
+		t.Fatalf("FindPattern(wildcards) = %+v, want exact-match row", got)
 	}
 
 	// A LIKE-flavoured query must NOT match every row.
-	p, err := s.FindPatternByCmd(ctx, "select * from users")
+	p, err := s.FindPattern(ctx, "select * from users", "")
 	if err != nil {
-		t.Fatalf("FindPatternByCmd(prefix): %v", err)
+		t.Fatalf("FindPattern(prefix): %v", err)
 	}
 	if p != nil {
-		t.Fatalf("FindPatternByCmd(prefix) = %+v, want nil (no LIKE semantics)", p)
+		t.Fatalf("FindPattern(prefix) = %+v, want nil (no LIKE semantics)", p)
 	}
 
 	for _, token := range []string{"%", "_", "*", "100%", "_x"} {
-		if _, err := s.FindPatternByCmd(ctx, token); err != nil {
-			t.Fatalf("FindPatternByCmd(%q): %v", token, err)
+		if _, err := s.FindPattern(ctx, token, ""); err != nil {
+			t.Fatalf("FindPattern(%q): %v", token, err)
 		}
 	}
 
 	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: "%", FixCmd: "percent", SuccessRate: 1, UseCount: 2}); err != nil {
 		t.Fatalf("SavePattern(%%): %v", err)
 	}
-	pct, err := s.FindPatternByCmd(ctx, "%")
+	pct, err := s.FindPattern(ctx, "%", "")
 	if err != nil {
-		t.Fatalf("FindPatternByCmd(%%): %v", err)
+		t.Fatalf("FindPattern(%%): %v", err)
 	}
 	if pct == nil || pct.FixCmd != "percent" {
-		t.Fatalf("FindPatternByCmd(%% ) = %+v, want the literal '%%' pattern", pct)
+		t.Fatalf("FindPattern(%% ) = %+v, want the literal '%%' pattern", pct)
 	}
-	if other, err := s.FindPatternByCmd(ctx, "select *"); err != nil || other != nil {
-		t.Fatalf("FindPatternByCmd(select *) = %+v err=%v, want nil (no wildcard expansion)", other, err)
+	if other, err := s.FindPattern(ctx, "select *", ""); err != nil || other != nil {
+		t.Fatalf("FindPattern(select *) = %+v err=%v, want nil (no wildcard expansion)", other, err)
 	}
 }
 
-func TestFindPatternByCmdConcurrentSameKey(t *testing.T) {
+func TestFindPatternConcurrentSameKey(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: "hot-key", FixCmd: "fix", SuccessRate: 1, UseCount: 5}); err != nil {
@@ -477,13 +477,13 @@ func TestFindPatternByCmdConcurrentSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				p, err := s.FindPatternByCmd(ctx, "hot-key")
+				p, err := s.FindPattern(ctx, "hot-key", "")
 				if err != nil {
 					errs <- err
 					return
 				}
 				if p == nil || p.FixCmd != "fix" {
-					errs <- errors.New("FindPatternByCmd returned nil/wrong row")
+					errs <- errors.New("FindPattern returned nil/wrong row")
 					return
 				}
 			}
@@ -492,7 +492,7 @@ func TestFindPatternByCmdConcurrentSameKey(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		t.Fatalf("concurrent FindPatternByCmd error: %v", err)
+		t.Fatalf("concurrent FindPattern error: %v", err)
 	}
 }
 
@@ -509,8 +509,8 @@ func TestStoreContextTimeout(t *testing.T) {
 	defer cancel()
 	time.Sleep(5 * time.Millisecond) // let the deadline expire
 
-	if _, err := s.FindPatternByCmd(ctx, "cmd"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("FindPatternByCmd(expired ctx) = %v, want context deadline exceeded", err)
+	if _, err := s.FindPattern(ctx, "cmd", ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FindPattern(expired ctx) = %v, want context deadline exceeded", err)
 	}
 	if err := s.SaveCommand(ctx, &models.Command{Raw: "late"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SaveCommand(expired ctx) = %v, want context deadline exceeded", err)
@@ -538,8 +538,12 @@ func TestStoreThousandPatternsPerformance(t *testing.T) {
 
 	start = time.Now()
 	for _, probe := range []string{"fail-0", "fail-500", "fail-999", "missing-key"} {
-		if _, err := s.FindPatternByCmd(ctx, probe); err != nil {
-			t.Fatalf("FindPatternByCmd(%q): %v", probe, err)
+		outProbe := ""
+		if strings.HasPrefix(probe, "fail-") {
+			outProbe = strings.Replace(probe, "fail-", "out-", 1)
+		}
+		if _, err := s.FindPattern(ctx, probe, outProbe); err != nil {
+			t.Fatalf("FindPattern(%q): %v", probe, err)
 		}
 	}
 	queryDur := time.Since(start)
@@ -570,12 +574,12 @@ func TestPatternUpdateAtomicity(t *testing.T) {
 		t.Fatalf("SavePattern(v10): %v", err)
 	}
 
-	got, err := s.FindPatternByCmd(ctx, "updatable")
+	got, err := s.FindPattern(ctx, "updatable", "")
 	if err != nil {
-		t.Fatalf("FindPatternByCmd: %v", err)
+		t.Fatalf("FindPattern: %v", err)
 	}
 	if got == nil {
-		t.Fatal("FindPatternByCmd = nil")
+		t.Fatal("FindPattern = nil")
 	}
 	// Both counters update together — no torn read where use_count is new but
 	// success_rate is stale (or vice versa).
@@ -599,9 +603,9 @@ func TestPatternUpdateAtomicity(t *testing.T) {
 	}
 	wg.Wait()
 
-	got, err = s.FindPatternByCmd(ctx, "updatable")
+	got, err = s.FindPattern(ctx, "updatable", "")
 	if err != nil {
-		t.Fatalf("FindPatternByCmd after increments: %v", err)
+		t.Fatalf("FindPattern after increments: %v", err)
 	}
 	if got.UseCount != 109 {
 		t.Fatalf("final use_count = %d, want 109 (highest committed)", got.UseCount)
@@ -618,12 +622,12 @@ func TestPatternEmptyFixCmdRoundTrip(t *testing.T) {
 	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: "empty-fix", FixCmd: "", SuccessRate: 0.5, UseCount: 3}); err != nil {
 		t.Fatalf("SavePattern(empty fix_cmd): %v", err)
 	}
-	got, err := s.FindPatternByCmd(ctx, "empty-fix")
+	got, err := s.FindPattern(ctx, "empty-fix", "")
 	if err != nil {
-		t.Fatalf("FindPatternByCmd: %v", err)
+		t.Fatalf("FindPattern: %v", err)
 	}
 	if got == nil {
-		t.Fatal("FindPatternByCmd returned nil for a stored empty-fix pattern")
+		t.Fatal("FindPattern returned nil for a stored empty-fix pattern")
 	}
 	if got.FixCmd != "" || got.UseCount != 3 {
 		t.Fatalf("recalled pattern = %+v, want empty FixCmd with UseCount 3", got)

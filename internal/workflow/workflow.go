@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
+	"time"
 	"text/template"
 
 	"gopkg.in/yaml.v3"
@@ -46,8 +46,7 @@ func LoadFile(path string) (*Workflow, error) {
 	
 	// Pre-parse templates
 	for i := range wf.Steps {
-		promptTmpl := strings.ReplaceAll(wf.Steps[i].Prompt, `\n`, "\n")
-		tmpl, err := template.New(wf.Steps[i].Name).Option("missingkey=error").Parse(promptTmpl)
+		tmpl, err := template.New(wf.Steps[i].Name).Option("missingkey=error").Parse(wf.Steps[i].Prompt)
 		if err != nil {
 			return nil, fmt.Errorf("parse template for step %q: %w", wf.Steps[i].Name, err)
 		}
@@ -120,7 +119,8 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 	}
 
 	go func() {
-		bgCtx := context.Background()
+		bgCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		defer cancel()
 
 		updateJob := func(terminal bool) {
 			if err := store.UpdateWorkflowJob(bgCtx, job); err != nil {

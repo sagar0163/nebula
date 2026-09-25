@@ -94,13 +94,13 @@ func TestRenderPromptChaos(t *testing.T) {
 		{"unknown input var", "{{.input.missing}}", nil, nil, "", true},
 		{"unknown output var", "{{.output.nope}}", nil, nil, "", true},
 		{"malformed template", "{{.unclosed", nil, nil, "", true},
-		{"literal newline escape", `line1\nline2`, nil, nil, "line1\nline2", false},
+		{"literal newline escape", "line1\\nline2", nil, nil, "line1\\nline2", false},
 		{"html chars not escaped", "<script>alert(1)</script>", nil, nil, "<script>alert(1)</script>", false},
 		{"very large prompt", large, nil, nil, large, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			tmpl, err := template.New("t").Option("missingkey=error").Parse(strings.ReplaceAll(c.tmpl, `\n`, "\n"))
+			tmpl, err := template.New("t").Option("missingkey=error").Parse(c.tmpl)
 			if err != nil {
 				if c.wantErr {
 					return

@@ -1,11 +1,9 @@
 package memory
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"embed"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -250,20 +248,19 @@ func (s *SQLiteStore) SavePattern(ctx context.Context, p *models.Pattern) error 
 	return nil
 }
 
-// FindPatternByCmd returns the most-used pattern whose fail_cmd exactly
-// matches failCmd, or (nil, nil) when no pattern matches.
-func (s *SQLiteStore) FindPatternByCmd(ctx context.Context, failCmd string) (*models.Pattern, error) {
+// FindPattern returns the most-used pattern matching both failCmd and failOutput.
+func (s *SQLiteStore) FindPattern(ctx context.Context, failCmd, failOutput string) (*models.Pattern, error) {
 	var p models.Pattern
 	err := s.db.GetContext(ctx, &p,
 		`SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at
-			FROM patterns WHERE fail_cmd = ? ORDER BY use_count DESC LIMIT 1`, failCmd)
+			FROM patterns WHERE fail_cmd = ? AND fail_output = ? ORDER BY use_count DESC LIMIT 1`, failCmd, failOutput)
 	switch {
 	case err == nil:
 		return &p, nil
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("find pattern by cmd %q: %w", failCmd, err)
+		return nil, fmt.Errorf("find pattern: %w", err)
 	}
 }
 
@@ -326,13 +323,6 @@ func (s *SQLiteStore) Close() error {
 }
 
 // gobDecodeFloats decodes a gob-encoded []float32 embedding.
-func gobDecodeFloats(data []byte) ([]float32, error) {
-	var v []float32
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&v); err != nil {
-		return nil, err
-	}
-	return v, nil
-}
 
 
 // SaveWorkflowJob inserts a new workflow job.

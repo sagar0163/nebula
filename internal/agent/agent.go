@@ -123,10 +123,14 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		a.doomMu.Unlock()
 	}
 
+	a.doomMu.Lock()
 	a.sessionHistory = append(a.sessionHistory, fmt.Sprintf("%s (exit %d)", raw, cmdResult.ExitCode))
 	if len(a.sessionHistory) > a.historyDepth {
 		a.sessionHistory = a.sessionHistory[len(a.sessionHistory)-a.historyDepth:]
 	}
+	sessionSnap := make([]string, len(a.sessionHistory))
+	copy(sessionSnap, a.sessionHistory)
+	a.doomMu.Unlock()
 
 	// 5. On failure, attempt multi-turn healing.
 	maxTurns := 3
@@ -148,7 +152,7 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 			return result, fmt.Errorf("healing loop detected after 3 attempts — manual intervention required")
 		}
 
-		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout), a.harness.Transcript(), cmdResult.ExitCode, history, a.sessionHistory)
+		suggestion, err := a.planner.Plan(ctx, raw, string(cmdResult.Stdout), a.harness.Transcript(), cmdResult.ExitCode, history, sessionSnap)
 		if err != nil {
 			return result, nil // best-effort: return without healing
 		}

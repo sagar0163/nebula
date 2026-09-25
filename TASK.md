@@ -167,6 +167,109 @@ nebula setup                    first-run config wizard
 
 ---
 
+### TASK-021: Log swallowed SaveCommand / SaveTask errors (DONE)
+**Severity:** medium
+**Category:** correctness
+**Description:** `agent.go:92` and `agent.go:190` discard store errors with `_ =`. If SQLite is full or corrupt, commands are silently lost with no log. The heal still works but history is gone.
+
+**Details:**
+- File: `internal/agent/agent.go:92, 190`
+- Replace `_ = a.store.SaveCommand(...)` and `_ = a.store.SaveTask(...)` with error capture and `log.Printf("warn: save command: %v", err)` — don't fail the heal, just log it
+- Branch: `fix/log-store-errors`
+
+---
+
+### TASK-022: Log swallowed UpdateWorkflowJob errors (DONE)
+**Severity:** medium
+**Category:** correctness
+**Description:** Every state transition in the background workflow goroutine (`workflow.go:119,126,132,147,154,159`) silently discards `UpdateWorkflowJob` errors. A failed update means `nebula workflow status <id>` returns stale state with no indication anything went wrong.
+
+**Details:**
+- File: `internal/workflow/workflow.go:119,126,132,147,154,159`
+- Replace all `_ = store.UpdateWorkflowJob(...)` with error capture and log
+- On terminal state update failure (failed/done), retry once before giving up
+- Branch: `fix/log-workflow-job-errors`
+
+---
+
+### TASK-023: Remove dead FindSimilarPatterns / fix broken interface (DONE)
+**Severity:** high
+**Category:** dead-code / architecture
+**Description:** `FindSimilarPatterns(ctx, []float32, topK int)` is fully implemented in store.go but has zero callers. The embedding path was removed in TASK-008, so the `[]float32` parameter can never be populated. Dead feature burning maintenance cost with a broken interface contract.
+
+**Details:**
+- File: `internal/memory/memory.go:25`, `internal/memory/store.go:276`
+- Option A (preferred): remove `FindSimilarPatterns` from the interface and store entirely
+- Option B: change signature to `FindSimilarPatterns(ctx, failCmd string, topK int)` and wire into `planner.recallPattern` as a fuzzy fallback
+- Update all mock implementations in test files accordingly
+- Branch: `fix/remove-dead-similarity-search`
+
+---
+
+### TASK-024: Wire FindPermission into Executor OR remove dead code (DONE)
+**Severity:** medium
+**Category:** dead-code
+**Description:** `SavePermission` and `FindPermission` are fully implemented but never called. User approval decisions are thrown away — every identical command prompts the user again. Either wire them up or remove to reduce interface surface.
+
+**Details:**
+- File: `internal/agent/executor.go`, `internal/memory/store.go:316,354`, `internal/memory/memory.go:28-29`
+- Option A: In `Execute()`, call `FindPermission(ctx, suggestion.FixCmd)` first — if a saved allow/deny exists, use it without prompting. After user approves, call `SavePermission` to remember the decision.
+- Option B: Remove `SavePermission`/`FindPermission` from interface and store
+- Branch: `fix/wire-or-remove-permission-store`
+
+---
+
+### TASK-025: Populate Elapsed on saved commands (DONE)
+**Severity:** low
+**Category:** correctness
+**Description:** `models.Command.Elapsed` column exists in SQLite and is stored, but `agent.go:92` constructs the Command without setting it. Always stored as 0 — useless for performance analysis.
+
+**Details:**
+- File: `internal/agent/agent.go` in `Run()`
+- Capture `start := time.Now()` before `a.harness.Run(ctx, ...)`
+- Set `Elapsed: time.Since(start).Milliseconds()` on the Command struct before saving
+- Branch: `fix/populate-elapsed`
+
+---
+
+### TASK-026: Log learnPattern error instead of discarding (DONE)
+**Severity:** low
+**Category:** reliability
+**Description:** `executor.go:82` does `_ = e.learnPattern(...)`. If pattern storage fails, nebula won't remember the fix for next time — silent degradation with no indication.
+
+**Details:**
+- File: `internal/agent/executor.go:82`
+- Replace `_ = e.learnPattern(...)` with error capture and `log.Printf("warn: learnPattern: %v", err)`
+- Branch: `fix/log-learn-pattern-error`
+
+---
+
+### TASK-027: Fix rate-limit detection to catch all provider responses (DONE)
+**Severity:** medium
+**Category:** reliability
+**Description:** `router.go:151` only checks for `"429"` and `"rate limit"`. Misses `"Too Many Requests"` (standard HTTP phrase) and provider-specific messages like `"quota exceeded"`.
+
+**Details:**
+- File: `internal/llm/router.go:151`
+- Expand check: `strings.Contains(msg, "429") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "quota exceeded")`
+- Add test cases for each new string in router_test.go
+- Branch: `fix/rate-limit-detection`
+
+---
+
+### TASK-028: Expose PTY buffer sizes in config (DONE)
+**Severity:** low
+**Category:** architecture
+**Description:** `maxCaptureBytes = 512*1024` and ring size `256*1024` are hard-coded magic numbers. Power users running large builds can't tune them.
+
+**Details:**
+- Files: `internal/pty/pty.go`, `internal/cli/root.go`, `~/.config/nebula/config.toml`
+- Add `pty_capture_kb` and `pty_ring_kb` to config struct with defaults (512, 256)
+- Read them in `buildAgent()` / `runRun()` and pass to `pty.NewHarness(ringKB*1024, captureKB*1024)`
+- Branch: `fix/configurable-pty-buffers`
+
+---
+
 ### TASK-020: Fix data race in TestRunBackgroundPanicRecovery (DONE)
 **Severity:** high
 **Description:** The race detector reports a data race in `internal/workflow/workflow_panic_test.go`. The test's `mockStore` has no mutex — the background goroutine writes fields via `UpdateWorkflowJob()` while the test's main goroutine reads them unsynchronised.

@@ -379,6 +379,59 @@ nebula setup                    first-run config wizard
 
 ---
 
+### TASK-039: Implement smart Head + Tail context slicing in PTY buffer
+**Severity:** medium
+**Category:** performance
+**Description:** `cappedBuffer` in `internal/pty/pty.go` currently only keeps the tail (last N bytes) of command output. When commands fail due to root causes printed early (e.g. initial compiler warnings, missing config, build start errors) followed by thousands of lines of cascade errors, the LLM receives only the tail cascade and misses the actual root cause.
+
+**Details:**
+- File: `internal/pty/pty.go`
+- Refactor `cappedBuffer` to retain both the head (e.g. first 2-4 KB) and the tail (remaining budget up to cap), inserting `\n[... %d lines / %d bytes omitted ...]\n` in between when truncated.
+- Add tests in `internal/pty/pty_test.go` verifying head, omission marker, and tail are preserved on overflow.
+- Branch: `feat/head-tail-pty-buffer`
+
+---
+
+### TASK-040: Strip ANSI escape sequences before passing terminal output to LLM
+**Severity:** medium
+**Category:** efficiency
+**Description:** Terminal commands executed through PTY output raw ANSI color codes, cursor movements, and control sequences (e.g., `\x1b[31m`, `\x1b[0m`). These consume significant token budget and cause degraded reasoning / hallucinations on smaller models (e.g. Llama 3 8B, 7B models) without providing diagnostic value.
+
+**Details:**
+- Files: `internal/agent/planner.go`, `internal/agent/agent.go`
+- Add a regex / ANSI strip utility in `internal/pty/` or `internal/agent/` to sanitize stdout/stderr before injecting into `buildDiagnosePrompt` and `diagnosePrompt`.
+- Ensure raw terminal output streamed to user stdout preserves colors, but LLM prompt receives cleaned plaintext.
+- Add unit tests validating removal of colors, bold, cursor moves, and OSC sequences.
+- Branch: `feat/strip-ansi-llm-prompt`
+
+---
+
+### TASK-041: Propagate terminal resize (SIGWINCH) to PTY harness
+**Severity:** low
+**Category:** reliability
+**Description:** The PTY runner in `internal/pty/pty.go` sets up raw mode and pipes standard I/O, but does not listen for window resize signals (`syscall.SIGWINCH`). If an interactive command or full-screen fallback (e.g., `nano`, `vim`, interactive diffs) runs in a resized terminal, the child process retains default 80x24 window geometry, causing garbled screen updates and text wrapping.
+
+**Details:**
+- Files: `internal/pty/pty.go`, `internal/pty/resize_unix.go`, `internal/pty/resize_windows.go`
+- Listen for `SIGWINCH` on Unix systems and invoke `pty.InheritSize(os.Stdin, ptmx)` on signal.
+- Provide a no-op fallback on Windows.
+- Branch: `feat/pty-sigwinch-resize`
+
+---
+
+### TASK-042: Dynamic LLM context window token budgeting for command outputs
+**Severity:** low
+**Category:** performance
+**Description:** Output capture is currently fixed to a static byte limit (`512 KB` or config default). For models with smaller context windows (e.g., local 8k Ollama models), a 512 KB payload will exceed context limits and fail inference with context length errors. For large 128k/1M models (Gemini, Claude), it unnecessarily starves the model of available diagnostic context.
+
+**Details:**
+- Files: `internal/agent/planner.go`, `internal/llm/router.go`
+- Inspect active provider / model max context tokens in `router` and dynamically budget output slice passed to `buildDiagnosePrompt` (e.g. max 20% of context window).
+- Gracefully fall back to conservative defaults (4k tokens) if context limit is unknown.
+- Branch: `feat/dynamic-token-budgeting`
+
+---
+
 ### TASK-030: Remove or fix OPTIMIZATION.md — contains fabricated benchmark numbers (DONE)
 **Severity:** medium
 **Category:** docs

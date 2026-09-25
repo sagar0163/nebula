@@ -153,3 +153,39 @@ func isRL(msg string) bool {
 		strings.Contains(msg, "too many requests") ||
 		strings.Contains(msg, "quota exceeded")
 }
+
+// ContextWindow returns the context window token limit for the best available
+// provider for the given workload. If unknown or unavailable, returns 4096.
+func (r *Router) ContextWindow(ctx context.Context, w Workload) int {
+	chain := r.providers[w]
+	if len(chain) == 0 {
+		for _, providers := range r.providers {
+			chain = append(chain, providers...)
+		}
+	}
+
+	for _, p := range chain {
+		if !p.Available(ctx) {
+			continue
+		}
+		if cp, ok := p.(interface{ ContextWindow(Workload) int }); ok {
+			if tokens := cp.ContextWindow(w); tokens > 0 {
+				return tokens
+			}
+		}
+		switch p.Name() {
+		case "gemini":
+			return 1_000_000
+		case "mistral", "nvidia":
+			return 32_768
+		case "groq":
+			return 8_192
+		case "ollama":
+			return 8_192
+		case "anthropic", "openai":
+			return 128_000
+		}
+	}
+
+	return 4_096
+}

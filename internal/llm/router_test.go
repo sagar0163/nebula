@@ -360,3 +360,27 @@ func TestIsRL(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterContextWindow(t *testing.T) {
+	r := NewRouter()
+	ctx := context.Background()
+
+	// Empty router defaults to 4096
+	if got := r.ContextWindow(ctx, WorkloadDiagnose); got != 4096 {
+		t.Fatalf("empty router ContextWindow = %d, want 4096", got)
+	}
+
+	// Register known provider
+	r.Register(WorkloadDiagnose, &stubProvider{name: "gemini", available: true})
+	if got := r.ContextWindow(ctx, WorkloadDiagnose); got != 1_000_000 {
+		t.Fatalf("gemini ContextWindow = %d, want 1000000", got)
+	}
+
+	// Workload with Groq
+	rGroq := NewRouter()
+	rGroq.Register(WorkloadDiagnose, &stubProvider{name: "groq", available: true})
+	if got := rGroq.ContextWindow(ctx, WorkloadDiagnose); got != 8_192 {
+		t.Fatalf("groq ContextWindow = %d, want 8192", got)
+	}
+}
+

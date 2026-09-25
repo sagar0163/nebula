@@ -36,7 +36,42 @@ func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string) 
 	return p.diagnose(ctx, failCmd, output, transcript)
 }
 
+func (p *Planner) budgetOutput(ctx context.Context, output string) string {
+	cw := 4096
+	if p.router != nil {
+		cw = p.router.ContextWindow(ctx, llm.WorkloadDiagnose)
+		if cw <= 0 {
+			cw = 4096
+		}
+	}
+	// Budget max 20% of context window for command output (approx 4 chars per token)
+	tokenBudget := cw * 20 / 100
+	maxBytes := tokenBudget * 4
+	if maxBytes < 1024 {
+		maxBytes = 1024
+	}
+
+	if len(output) <= maxBytes {
+		return output
+	}
+
+	headCap := maxBytes / 4
+	if headCap < 128 {
+		headCap = 128
+	}
+	marker := fmt.Sprintf("\n[... %d bytes omitted ...]\n", len(output)-maxBytes)
+	tailBudget := maxBytes - headCap - len(marker)
+	if tailBudget <= 0 {
+		return output[len(output)-maxBytes:]
+	}
+
+	head := output[:headCap]
+	tail := output[len(output)-tailBudget:]
+	return head + marker + tail
+}
+
 func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string) (*models.HealSuggestion, error) {
+	output = p.budgetOutput(ctx, output)
 	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript))
 	req := llm.Request{
 		SystemPrompt: systemPrompt,

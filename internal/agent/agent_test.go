@@ -396,6 +396,41 @@ func TestDiagnosePromptStripsANSI(t *testing.T) {
 	}
 }
 
+func TestBudgetOutput(t *testing.T) {
+	router := llm.NewRouter()
+	planner := NewPlanner(router, newTestStore(t))
+	ctx := context.Background()
+
+	// Short output passes through untouched
+	short := "compilation error: undefined symbol Foo"
+	if got := planner.budgetOutput(ctx, short); got != short {
+		t.Fatalf("short output was modified: %q", got)
+	}
+
+	// Long output exceeding budget is sliced with head, marker, and tail
+	var large strings.Builder
+	large.WriteString("FIRST_LINE_OF_LONG_OUTPUT\n")
+	for i := 0; i < 500; i++ {
+		large.WriteString(fmt.Sprintf("cascade error noise line %d\n", i))
+	}
+	large.WriteString("LAST_LINE_OF_LONG_OUTPUT\n")
+
+	budgeted := planner.budgetOutput(ctx, large.String())
+	if len(budgeted) >= large.Len() {
+		t.Fatalf("budgeted output length %d was not truncated (original %d)", len(budgeted), large.Len())
+	}
+	if !strings.Contains(budgeted, "FIRST_LINE_OF_LONG_OUTPUT") {
+		t.Errorf("budgeted output missing head: %s", budgeted)
+	}
+	if !strings.Contains(budgeted, "omitted") {
+		t.Errorf("budgeted output missing omission marker: %s", budgeted)
+	}
+	if !strings.Contains(budgeted, "LAST_LINE_OF_LONG_OUTPUT") {
+		t.Errorf("budgeted output missing tail: %s", budgeted)
+	}
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Executor metacharacter, unicode, and size chaos

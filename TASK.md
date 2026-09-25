@@ -419,7 +419,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-042: Dynamic LLM context window token budgeting for command outputs
+### TASK-042: Dynamic LLM context window token budgeting for command outputs (DONE)
 **Severity:** low
 **Category:** performance
 **Description:** Output capture is currently fixed to a static byte limit (`512 KB` or config default). For models with smaller context windows (e.g., local 8k Ollama models), a 512 KB payload will exceed context limits and fail inference with context length errors. For large 128k/1M models (Gemini, Claude), it unnecessarily starves the model of available diagnostic context.

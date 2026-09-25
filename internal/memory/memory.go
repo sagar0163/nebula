@@ -23,9 +23,6 @@ type Store interface {
 	SavePattern(ctx context.Context, p *models.Pattern) error
 	FindPatternByCmd(ctx context.Context, failCmd string) (*models.Pattern, error)
 
-	// Permission rules
-	SavePermission(ctx context.Context, p *models.Permission) error
-	FindPermission(ctx context.Context, cmdPattern string) (*models.Permission, error)
 
 	// General tasks
 	SaveTask(ctx context.Context, t *models.Task) error

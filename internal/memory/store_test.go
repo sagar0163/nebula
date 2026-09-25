@@ -515,9 +515,6 @@ func TestStoreContextTimeout(t *testing.T) {
 	if err := s.SaveCommand(ctx, &models.Command{Raw: "late"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SaveCommand(expired ctx) = %v, want context deadline exceeded", err)
 	}
-	if _, err := s.FindPermission(ctx, "ls"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("FindPermission(expired ctx) = %v, want context deadline exceeded", err)
-	}
 }
 
 func TestStoreThousandPatternsPerformance(t *testing.T) {

@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -272,82 +270,7 @@ func (s *SQLiteStore) FindPatternByCmd(ctx context.Context, failCmd string) (*mo
 // score descending. Patterns with unreadable embeddings are skipped.
 // A topK <= 0 returns all matches.
 
-// SavePermission persists an allow/deny/ask rule, replacing the rule for an
-// already-known pattern.
-func (s *SQLiteStore) SavePermission(ctx context.Context, p *models.Permission) error {
-	if p == nil {
-		return errors.New("memory: nil permission")
-	}
-	if strings.TrimSpace(p.Pattern) == "" {
-		return errors.New("memory: save permission: empty pattern")
-	}
-	switch p.Decision {
-	case "allow", "deny", "ask":
-	default:
-		return fmt.Errorf("memory: save permission: invalid decision %q", p.Decision)
-	}
-	if p.CreatedAt.IsZero() {
-		p.CreatedAt = time.Now().UTC()
-	}
 
-	const q = `INSERT INTO permissions (pattern, decision, created_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(pattern) DO UPDATE SET
-			decision   = excluded.decision,
-			created_at = excluded.created_at`
-
-	res, err := s.db.ExecContext(ctx, q, p.Pattern, p.Decision, p.CreatedAt)
-	if err != nil {
-		return fmt.Errorf("save permission: %w", err)
-	}
-	if id, err := res.LastInsertId(); err == nil {
-		p.ID = id
-	}
-	return nil
-}
-
-// FindPermission returns the permission rule for the given command. An exact
-// pattern match wins; otherwise rules are matched as globs (filepath.Match
-// semantics), with the most specific match taking precedence. Returns
-// (nil, nil) when no rule applies.
-func (s *SQLiteStore) FindPermission(ctx context.Context, cmdPattern string) (*models.Permission, error) {
-	if strings.TrimSpace(cmdPattern) == "" {
-		return nil, nil
-	}
-
-	var perm models.Permission
-	err := s.db.GetContext(ctx, &perm,
-		`SELECT id, pattern, decision, created_at FROM permissions WHERE pattern = ? LIMIT 1`, cmdPattern)
-	switch {
-	case err == nil:
-		return &perm, nil
-	case errors.Is(err, sql.ErrNoRows):
-	default:
-		return nil, fmt.Errorf("find permission %q: %w", cmdPattern, err)
-	}
-
-	rules := []models.Permission{}
-	if err := s.db.SelectContext(ctx, &rules,
-		`SELECT id, pattern, decision, created_at FROM permissions`,
-	); err != nil {
-		return nil, fmt.Errorf("find permission %q: %w", cmdPattern, err)
-	}
-
-	matches := []models.Permission{}
-	for _, r := range rules {
-		if globMatch(r.Pattern, cmdPattern) {
-			matches = append(matches, r)
-		}
-	}
-	if len(matches) == 0 {
-		return nil, nil
-	}
-
-	sort.Slice(matches, func(i, j int) bool {
-		return len(matches[i].Pattern) > len(matches[j].Pattern)
-	})
-	return &matches[0], nil
-}
 
 // SaveTask persists a general-purpose task and its response.
 func (s *SQLiteStore) SaveTask(ctx context.Context, t *models.Task) error {
@@ -411,11 +334,6 @@ func gobDecodeFloats(data []byte) ([]float32, error) {
 	return v, nil
 }
 
-// globMatch reports whether s matches pattern using filepath.Match semantics.
-func globMatch(pattern, s string) bool {
-	ok, err := filepath.Match(pattern, s)
-	return err == nil && ok
-}
 
 // SaveWorkflowJob inserts a new workflow job.
 func (s *SQLiteStore) SaveWorkflowJob(ctx context.Context, j *models.WorkflowJob) error {

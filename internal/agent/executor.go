@@ -56,6 +56,12 @@ func containsUnquotedMeta(s string) bool {
 }
 
 func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestion, failOutput string, approvalFn func(string, safety.Risk) bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(suggestion.FixCmd) == "" {
+		return errors.New("fix command is empty")
+	}
 	args, err := shlex.Split(suggestion.FixCmd)
 	if err != nil {
 		return fmt.Errorf("parse fix command: %w", err)

@@ -3,11 +3,13 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 
@@ -370,4 +372,263 @@ func TestWorkflowJobChaos(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestSaveCommandDuplicate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateSession(ctx, &models.Session{ID: "sess-dup", WorkDir: "/tmp"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first := &models.Command{SessionID: "sess-dup", Raw: "ls -la", ExitCode: 0, Stdout: "first"}
+	if err := s.SaveCommand(ctx, first); err != nil {
+		t.Fatalf("SaveCommand(first): %v", err)
+	}
+	time.Sleep(10 * time.Millisecond) // ensure a distinct created_at
+	second := &models.Command{SessionID: "sess-dup", Raw: "ls -la", ExitCode: 1, Stdout: "second"}
+	if err := s.SaveCommand(ctx, second); err != nil {
+		t.Fatalf("SaveCommand(duplicate): %v", err)
+	}
+
+	// A duplicate save must not error; both executions remain in history, newest first.
+	cmds := recentByRaw(t, s, "ls -la")
+	if len(cmds) != 2 {
+		t.Fatalf("duplicate save kept %d rows, want 2", len(cmds))
+	}
+	if cmds[0].Stdout != "second" || cmds[1].Stdout != "first" {
+		t.Fatalf("history order = [%q %q], want [second first]", cmds[0].Stdout, cmds[1].Stdout)
+	}
+
+	// The duplicate save also updates (touches) the session.
+	before, _ := s.GetSession(ctx, "sess-dup")
+	time.Sleep(10 * time.Millisecond)
+	if err := s.SaveCommand(ctx, &models.Command{SessionID: "sess-dup", Raw: "ls -la"}); err != nil {
+		t.Fatalf("SaveCommand(third): %v", err)
+	}
+	after, err := s.GetSession(ctx, "sess-dup")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if !after.UpdatedAt.After(before.UpdatedAt) {
+		t.Fatalf("session UpdatedAt = %v not after %v; duplicate save did not update", after.UpdatedAt, before.UpdatedAt)
+	}
+}
+
+func TestFindPatternByCmdSqlWildcards(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	wild := "select * from users where name like '100%_x'"
+	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: wild, FixCmd: "fix", SuccessRate: 1, UseCount: 1}); err != nil {
+		t.Fatalf("SavePattern(wildcard cmd): %v", err)
+	}
+	// A command full of LIKE metacharacters must round-trip by exact match.
+	got, err := s.FindPatternByCmd(ctx, wild)
+	if err != nil {
+		t.Fatalf("FindPatternByCmd(wildcards): %v", err)
+	}
+	if got == nil || got.FixCmd != "fix" {
+		t.Fatalf("FindPatternByCmd(wildcards) = %+v, want exact-match row", got)
+	}
+
+	// A LIKE-flavoured query must NOT match every row.
+	p, err := s.FindPatternByCmd(ctx, "select * from users")
+	if err != nil {
+		t.Fatalf("FindPatternByCmd(prefix): %v", err)
+	}
+	if p != nil {
+		t.Fatalf("FindPatternByCmd(prefix) = %+v, want nil (no LIKE semantics)", p)
+	}
+
+	for _, token := range []string{"%", "_", "*", "100%", "_x"} {
+		if _, err := s.FindPatternByCmd(ctx, token); err != nil {
+			t.Fatalf("FindPatternByCmd(%q): %v", token, err)
+		}
+	}
+
+	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: "%", FixCmd: "percent", SuccessRate: 1, UseCount: 2}); err != nil {
+		t.Fatalf("SavePattern(%%): %v", err)
+	}
+	pct, err := s.FindPatternByCmd(ctx, "%")
+	if err != nil {
+		t.Fatalf("FindPatternByCmd(%%): %v", err)
+	}
+	if pct == nil || pct.FixCmd != "percent" {
+		t.Fatalf("FindPatternByCmd(%% ) = %+v, want the literal '%%' pattern", pct)
+	}
+	if other, err := s.FindPatternByCmd(ctx, "select *"); err != nil || other != nil {
+		t.Fatalf("FindPatternByCmd(select *) = %+v err=%v, want nil (no wildcard expansion)", other, err)
+	}
+}
+
+func TestFindPatternByCmdConcurrentSameKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: "hot-key", FixCmd: "fix", SuccessRate: 1, UseCount: 5}); err != nil {
+		t.Fatalf("SavePattern: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 50)
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				p, err := s.FindPatternByCmd(ctx, "hot-key")
+				if err != nil {
+					errs <- err
+					return
+				}
+				if p == nil || p.FixCmd != "fix" {
+					errs <- errors.New("FindPatternByCmd returned nil/wrong row")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent FindPatternByCmd error: %v", err)
+	}
+}
+
+func TestStoreContextTimeout(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SavePattern(context.Background(), &models.Pattern{FailCmd: "cmd", FixCmd: "fix", SuccessRate: 1, UseCount: 1}); err != nil {
+		t.Fatalf("SavePattern: %v", err)
+	}
+	if err := s.SaveCommand(context.Background(), &models.Command{Raw: "cmd", ExitCode: 0}); err != nil {
+		t.Fatalf("SaveCommand: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+	time.Sleep(5 * time.Millisecond) // let the deadline expire
+
+	if _, err := s.FindPatternByCmd(ctx, "cmd"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FindPatternByCmd(expired ctx) = %v, want context deadline exceeded", err)
+	}
+	if err := s.SaveCommand(ctx, &models.Command{Raw: "late"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SaveCommand(expired ctx) = %v, want context deadline exceeded", err)
+	}
+	if _, err := s.FindPermission(ctx, "ls"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FindPermission(expired ctx) = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestStoreThousandPatternsPerformance(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	start := time.Now()
+	for i := 0; i < 1000; i++ {
+		if err := s.SavePattern(ctx, &models.Pattern{
+			FailCmd:     fmt.Sprintf("fail-%d", i),
+			FailOutput:  fmt.Sprintf("out-%d", i),
+			FixCmd:      fmt.Sprintf("fix-%d", i),
+			SuccessRate: 0.5,
+			UseCount:    i,
+			Embedding:   nil,
+		}); err != nil {
+			t.Fatalf("SavePattern %d: %v", i, err)
+		}
+	}
+	saveDur := time.Since(start)
+
+	start = time.Now()
+	for _, probe := range []string{"fail-0", "fail-500", "fail-999", "missing-key"} {
+		if _, err := s.FindPatternByCmd(ctx, probe); err != nil {
+			t.Fatalf("FindPatternByCmd(%q): %v", probe, err)
+		}
+	}
+	queryDur := time.Since(start)
+
+	// The heavy requirement: querying against 1000 stored patterns completes in
+	// well under a second. The bulk-insert burst gets a generous sanity bound.
+	if queryDur >= time.Second {
+		t.Fatalf("query over 1000 patterns took %v, want < 1s", queryDur)
+	}
+	if total := saveDur + queryDur; total > 5*time.Second {
+		t.Fatalf("save+query over %d patterns took %v, suspiciously slow", 1000, total)
+	}
+}
+
+func TestPatternUpdateAtomicity(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	save := func(useCount int, rate float64) error {
+		return s.SavePattern(ctx, &models.Pattern{
+			FailCmd: "updatable", FixCmd: "fix", SuccessRate: rate, UseCount: useCount,
+		})
+	}
+	if err := save(1, 1.0); err != nil {
+		t.Fatalf("SavePattern(v1): %v", err)
+	}
+	if err := save(10, 0.9); err != nil {
+		t.Fatalf("SavePattern(v10): %v", err)
+	}
+
+	got, err := s.FindPatternByCmd(ctx, "updatable")
+	if err != nil {
+		t.Fatalf("FindPatternByCmd: %v", err)
+	}
+	if got == nil {
+		t.Fatal("FindPatternByCmd = nil")
+	}
+	// Both counters update together — no torn read where use_count is new but
+	// success_rate is stale (or vice versa).
+	if got.UseCount != 10 || got.SuccessRate != 0.9 {
+		t.Fatalf("pattern = use_count %d rate %v, want updated pair {10 0.9} atomically", got.UseCount, got.SuccessRate)
+	}
+
+	// Concurrent increments must converge to the highest committed version.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			use := 100 + i
+			if err := s.SavePattern(ctx, &models.Pattern{
+				FailCmd: "updatable", FixCmd: "fix", SuccessRate: float64(use) / 200, UseCount: use,
+			}); err != nil {
+				t.Errorf("concurrent SavePattern(use=%d): %v", use, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	got, err = s.FindPatternByCmd(ctx, "updatable")
+	if err != nil {
+		t.Fatalf("FindPatternByCmd after increments: %v", err)
+	}
+	if got.UseCount != 109 {
+		t.Fatalf("final use_count = %d, want 109 (highest committed)", got.UseCount)
+	}
+	if got.SuccessRate != float64(109)/200 {
+		t.Fatalf("final success_rate = %v, want %v (paired with use_count)", got.SuccessRate, float64(109)/200)
+	}
+}
+
+func TestPatternEmptyFixCmdRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SavePattern(ctx, &models.Pattern{FailCmd: "empty-fix", FixCmd: "", SuccessRate: 0.5, UseCount: 3}); err != nil {
+		t.Fatalf("SavePattern(empty fix_cmd): %v", err)
+	}
+	got, err := s.FindPatternByCmd(ctx, "empty-fix")
+	if err != nil {
+		t.Fatalf("FindPatternByCmd: %v", err)
+	}
+	if got == nil {
+		t.Fatal("FindPatternByCmd returned nil for a stored empty-fix pattern")
+	}
+	if got.FixCmd != "" || got.UseCount != 3 {
+		t.Fatalf("recalled pattern = %+v, want empty FixCmd with UseCount 3", got)
+	}
 }

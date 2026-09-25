@@ -64,6 +64,10 @@ var scrubPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36}`),                    // GitHub token
 	regexp.MustCompile(`Bearer\s+[A-Za-z0-9\-_\.]{20,}`),               // bearer token
 	regexp.MustCompile(`(?i)password\s*[:=]\s*\S{4,}`),                 // generic password assignment
+	regexp.MustCompile(`sk_(live|test)_[a-zA-Z0-9]{16,}`),              // Stripe secret key
+	regexp.MustCompile(`SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}`), // SendGrid API key
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b`), // JWT
+	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----`), // PEM private key block
 }
 
 // Classify assesses the risk level of a raw command string.

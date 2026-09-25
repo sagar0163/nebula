@@ -128,6 +128,11 @@ Output:
 %s
 `, cmd, output)
 
+	pCtx := DetectProjectContext("")
+	if pCtxStr := pCtx.String(); pCtxStr != "" {
+		prompt = pCtxStr + "\n\n" + prompt
+	}
+
 	if transcript != "" {
 		prompt += fmt.Sprintf("\nRecent Terminal Context:\n%s\n", transcript)
 	}

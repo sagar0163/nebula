@@ -570,7 +570,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-049: Project context fingerprinting — inject language + build system on every call
+### TASK-049: Project context fingerprinting — inject language + build system on every call (DONE)
 **Severity:** high
 **Category:** fix accuracy
 **Description:** The LLM currently has zero knowledge of the project it's operating in. It doesn't know if it's a Go module, Node app, Python service, or Makefile project. It can't suggest `go mod tidy` vs `npm install` without guessing from the error text alone. A one-time project fingerprint injected into every prompt would improve suggestion quality significantly.

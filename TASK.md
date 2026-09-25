@@ -272,7 +272,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-031: Fix prompt injection via command output — fake FIX: lines
+### TASK-031: Fix prompt injection via command output — fake FIX: lines (DONE)
 **Severity:** high
 **Category:** security
 **Description:** `buildDiagnosePrompt` injects raw command output directly into the LLM prompt via `fmt.Sprintf`. If a failing command prints `FIX: rm -rf /` to stdout, `parseSuggestion` will parse it as the suggested fix. An attacker controlling command output can inject arbitrary fix commands.
@@ -286,7 +286,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-032: Fix recallPattern ignores failure context — recalls wrong fixes
+### TASK-032: Fix recallPattern ignores failure context — recalls wrong fixes (DONE)
 **Severity:** high
 **Category:** correctness
 **Description:** `recallPattern` matches on `failCmd` alone. If `git push` fails with "rejected — non-fast-forward" it recalls a fix. If next time `git push` fails with "authentication failed", it recalls the **same wrong fix** — the failure output is passed in but never used for matching.
@@ -300,7 +300,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-033: Fix doom loop hash collision on empty stdout
+### TASK-033: Fix doom loop hash collision on empty stdout (DONE)
 **Severity:** high
 **Category:** reliability
 **Description:** The fingerprint `fmt.Sprintf("%s:%x", raw, outHash[:8])` hashes `cmdResult.Stdout`. Commands that fail with empty stdout (e.g. `false`, `exit 1`) always produce the same hash suffix `sha256("")`, so different commands with empty output share doom-loop counters and interfere with each other.
@@ -313,7 +313,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-034: Raise risk level for script file execution
+### TASK-034: Raise risk level for script file execution (DONE)
 **Severity:** medium
 **Category:** security
 **Description:** `python -c` is blocked as `RiskDangerous` but `python3 exploit.py` passes as `RiskMedium` with just one approval prompt. An LLM could suggest `python3 /tmp/x.py` with injected malicious content. Same for `node script.js`, `ruby script.rb`, `bash script.sh`.
@@ -326,7 +326,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-035: Add timeout/cancellation to background workflow jobs
+### TASK-035: Add timeout/cancellation to background workflow jobs (DONE)
 **Severity:** medium
 **Category:** reliability
 **Description:** `RunBackground` uses `bgCtx := context.Background()` — background jobs can never be cancelled or timed out. A hung LLM call hangs the goroutine forever with no way to stop it short of killing the process.
@@ -339,7 +339,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-036: Remove \\n replacement in workflow templates — corrupts content
+### TASK-036: Remove \\n replacement in workflow templates — corrupts content (DONE)
 **Severity:** medium
 **Category:** correctness
 **Description:** `workflow.go:51` calls `strings.ReplaceAll(wf.Steps[i].Prompt, \`\n\`, "\n")` — replaces the literal two-char sequence `\n` with a real newline. Any workflow prompt containing a Windows path (`C:\network\path`) or a regex (`\n+`) gets silently mangled.
@@ -353,7 +353,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-037: Fix find prefix check — matches findstr and other binaries
+### TASK-037: Fix find prefix check — matches findstr and other binaries (DONE)
 **Severity:** low
 **Category:** correctness
 **Description:** `safety.go:81` uses `strings.HasPrefix(cmd, "find")` which matches any binary starting with "find" (e.g. `findstr`, `finder`). These would incorrectly get the `-exec`/`-delete` safety check applied.
@@ -366,7 +366,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-038: Remove stale gob import from store.go
+### TASK-038: Remove stale gob import from store.go (DONE)
 **Severity:** low
 **Category:** dead-code
 **Description:** `internal/memory/store.go` imports `"encoding/gob"` which was used by the now-removed `FindSimilarPatterns`. If it's no longer used, it's dead code and will cause a compile error if Go's unused import check catches it (or a vet warning).

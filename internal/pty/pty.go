@@ -69,6 +69,10 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 		}
 		defer term.Restore(int(os.Stdin.Fd()), oldState)
 
+		// Propagate window resize signals (SIGWINCH) to PTY.
+		stopResize := watchResize(ptmx)
+		defer stopResize()
+
 		// Pipe stdin to PTY.
 		done := make(chan struct{})
 		defer close(done)

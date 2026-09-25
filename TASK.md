@@ -406,7 +406,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-041: Propagate terminal resize (SIGWINCH) to PTY harness
+### TASK-041: Propagate terminal resize (SIGWINCH) to PTY harness (DONE)
 **Severity:** low
 **Category:** reliability
 **Description:** The PTY runner in `internal/pty/pty.go` sets up raw mode and pipes standard I/O, but does not listen for window resize signals (`syscall.SIGWINCH`). If an interactive command or full-screen fallback (e.g., `nano`, `vim`, interactive diffs) runs in a resized terminal, the child process retains default 80x24 window geometry, causing garbled screen updates and text wrapping.

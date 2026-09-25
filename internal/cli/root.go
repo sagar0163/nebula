@@ -225,7 +225,15 @@ func buildAgent() (*agent.Agent, error) {
 		}
 	}
 
-	harness := pty.NewHarness(256*1024, viper.GetInt("pty.capture_cap_bytes"))
+	ringKB := viper.GetInt("pty.ring_kb")
+	if ringKB == 0 {
+		ringKB = 256
+	}
+	capKB := viper.GetInt("pty.capture_kb")
+	if capKB == 0 {
+		capKB = 512
+	}
+	harness := pty.NewHarness(ringKB*1024, capKB*1024)
 	return agent.New(harness, router, store), nil
 }
 

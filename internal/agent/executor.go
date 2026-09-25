@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/google/shlex"
@@ -79,7 +80,7 @@ func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestio
 
 	fixResult, err := e.harness.Run(ctx, args[0], args[1:])
 	if err == nil && fixResult.ExitCode == 0 {
-		_ = e.learnPattern(ctx, suggestion.OriginalCmd, failOutput, suggestion.FixCmd)
+		if err := e.learnPattern(ctx, suggestion.OriginalCmd, failOutput, suggestion.FixCmd); err != nil { log.Printf("warn: learnPattern: %v", err) }
 	}
 
 	return err

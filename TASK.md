@@ -167,6 +167,22 @@ nebula setup                    first-run config wizard
 
 ---
 
+### TASK-020: Fix data race in TestRunBackgroundPanicRecovery (DONE)
+**Severity:** high
+**Description:** The race detector reports a data race in `internal/workflow/workflow_panic_test.go`. The test's `mockStore` has no mutex — the background goroutine writes fields via `UpdateWorkflowJob()` while the test's main goroutine reads them unsynchronised.
+
+**Details:**
+- File: `internal/workflow/workflow_panic_test.go`
+- Add `sync.Mutex` to the `mockStore` struct
+- Lock/unlock in `UpdateWorkflowJob()` when writing fields
+- Acquire the mutex (or use getter methods) before reading fields in test assertions (lines ~46, 49, 52)
+- Use a channel or `WaitGroup` to wait for the goroutine to finish before asserting — no bare `time.Sleep`
+- Verify: `go test -race -count=3 ./internal/workflow/...` must pass with zero race warnings
+
+**Branch:** `fix/workflow-panic-test-race`
+
+---
+
 ### TASK-019: Add panic recovery to background workflow goroutines (DONE)
 **Severity:** high
 **Description:** `workflow.go:113` launches background jobs in a goroutine with no `recover()`. A panic in any workflow step crashes the entire nebula process.

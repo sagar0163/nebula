@@ -535,6 +535,198 @@ nebula setup                    first-run config wizard
 
 ---
 
+---
+
+## Ultimate Harness Upgrade — Layer 1: Clean the Prompt
+
+### TASK-047: Summarize long command output before LLM injection
+**Severity:** high
+**Category:** token efficiency
+**Description:** Stack traces and build failures routinely produce 200–2000 lines of output. Today all of it lands raw in `buildDiagnosePrompt`. A 200-line Node.js stack trace is ~8KB; a failed Go build with cascade errors can be 50KB. Most of it is noise — repeated frames, irrelevant warnings, intermediate output. The signal is in: the first error, the last few lines, and any line containing "error:", "fatal:", "panic:", "FAIL", "undefined".
+
+**Details:**
+- Add `internal/agent/output_summarizer.go`
+- If `len(stdout) <= 4096`: pass through unchanged
+- If `len(stdout) > 4096`: extract (a) first 512B, (b) all lines matching `/error:|fatal:|panic:|FAIL|undefined|not found|cannot|failed/i`, (c) last 512B — deduplicate, join with `\n[...N lines omitted...]\n`
+- Apply in `buildDiagnosePrompt` before injecting stdout
+- Add tests: verify long output is compressed, error lines are preserved, short output is unchanged
+- Branch: `feat/output-summarizer`
+
+---
+
+### TASK-048: Multi-turn reasoning loop — retry with history on fix failure
+**Severity:** critical
+**Category:** fix accuracy
+**Description:** Today the agent makes one LLM call per fix attempt. If the fix is wrong and the command fails again, the agent starts from scratch with no memory of what was tried. This is the single biggest gap vs. Claude Code and OpenHands. A 3-turn reasoning loop where the LLM sees "I tried X, it failed with Y, now suggest Z" would dramatically improve fix accuracy on real-world multi-step failures.
+
+**Details:**
+- File: `internal/agent/agent.go` + `internal/agent/planner.go`
+- Add a `history []TurnRecord` to `Planner` — each turn records: attempted fix, result stdout, exit code
+- After a fix attempt fails, call `buildDiagnosePrompt` with full history appended: "Previously tried: `fix1` → failed with: `output1`"
+- Cap at `maxTurns` (default 3, configurable via `config.toml` as `agent_max_turns`)
+- Only enter next turn if: exit code != 0 AND new output is different from previous turn (not a doom loop)
+- Add tests: 2-turn fix scenario where first fix partially works, second fixes remaining error
+- Branch: `feat/multi-turn-reasoning`
+
+---
+
+### TASK-049: Project context fingerprinting — inject language + build system on every call
+**Severity:** high
+**Category:** fix accuracy
+**Description:** The LLM currently has zero knowledge of the project it's operating in. It doesn't know if it's a Go module, Node app, Python service, or Makefile project. It can't suggest `go mod tidy` vs `npm install` without guessing from the error text alone. A one-time project fingerprint injected into every prompt would improve suggestion quality significantly.
+
+**Details:**
+- Add `internal/agent/project_context.go` with `DetectProjectContext(dir string) ProjectContext`
+- Detect: language (go.mod → Go, package.json → Node, requirements.txt → Python, Makefile → make), Go version (from go.mod), Node version (from .nvmrc/package.json engines), Python version (from .python-version/pyproject.toml)
+- Cache result per working directory in memory for the session (re-detect if dir changes)
+- Prepend a compact context line to every `buildDiagnosePrompt`: `"Project: Go 1.22 module (github.com/sagar0163/nebula), build tool: go build"`
+- Add tests covering each project type detection
+- Branch: `feat/project-context-fingerprint`
+
+---
+
+### TASK-050: Semantic fix verification — re-run original command after fix
+**Severity:** high
+**Category:** fix accuracy
+**Description:** Today "success" means the fix command exited 0. But `git config --global user.email "x"` exits 0 even if the original failing command was `go build` — the underlying problem may be unchanged. After applying a fix, re-run the original failing command and use its result (not the fix command's result) as ground truth for success/failure.
+
+**Details:**
+- File: `internal/agent/agent.go` `Run()`
+- After fix executes with exit 0, re-run the original `failCmd` with a short timeout (30s)
+- If re-run exits 0: genuine success — learn the pattern, break the loop
+- If re-run exits non-0 with same error: fix was wrong — increment doom counter, continue loop
+- If re-run exits non-0 with different error: partial progress — pass new output to next reasoning turn (see TASK-048)
+- Add a config flag `agent_verify_fix` (default true) to allow opting out for slow builds
+- Add tests covering: fix works (re-run passes), fix doesn't work (re-run same error), fix partial (re-run different error)
+- Branch: `feat/fix-verification`
+
+---
+
+### TASK-051: Semantic pattern recall — keyword overlap instead of exact string match
+**Severity:** medium
+**Category:** fix accuracy
+**Description:** `recallPattern` currently does exact-string match on `failCmd`. `"npm run build"` and `"npm run build --verbose"` are treated as completely different commands and never share recalled patterns. Same fix applies to both. A lightweight keyword overlap score (no embeddings needed) would dramatically improve recall hit rate.
+
+**Details:**
+- File: `internal/agent/planner.go` + `internal/memory/store.go`
+- Add `FindPatternsByKeywords(ctx, keywords []string, limit int) ([]Pattern, error)` to the store — SQL: `WHERE fail_cmd LIKE '%keyword%' OR fail_output LIKE '%keyword%'`
+- In `recallPattern`: extract significant tokens from `failCmd` + top error line (strip common words: "the", "a", "is", "at", "in", "on"), query `FindPatternsByKeywords`, rank by overlap count, return best match above threshold (≥2 keyword matches)
+- Keep exact match as first attempt, fall through to keyword recall only on miss
+- Add tests: `"npm run build"` recalls pattern stored under `"npm run build --verbose"` via keyword overlap
+- Branch: `feat/keyword-pattern-recall`
+
+---
+
+### TASK-052: Add `nebula workflow cancel <id>` command
+**Severity:** medium
+**Category:** reliability
+**Description:** TASK-035 added a 2hr hard timeout to background workflows but there is no way to cancel a running job early. Long-running background workflows (e.g. research workflows hitting slow LLMs) block a job slot with no escape hatch.
+
+**Details:**
+- File: `internal/workflow/workflow.go` + `internal/cli/commands.go`
+- Add `CancelWorkflowJob(ctx, id)` to store — sets status to `"cancelled"`
+- In background goroutine: check job status in store between steps; if `"cancelled"`, stop gracefully
+- Add cobra subcommand `nebula workflow cancel <id>`
+- Add test: cancel a running job, verify goroutine stops after current step
+- Branch: `feat/workflow-cancel`
+
+---
+
+### TASK-053: Structured LLM response format — replace regex parsing with JSON
+**Severity:** medium
+**Category:** reliability
+**Description:** `parseSuggestion` in `planner.go` uses regex to extract `FIX:` and `EXPLANATION:` lines from free-form LLM text. This breaks silently whenever the model uses slightly different formatting (e.g. `Fix:`, `**FIX:**`, multi-line fixes). JSON response format is supported by all major providers and eliminates parsing fragility entirely.
+
+**Details:**
+- File: `internal/agent/planner.go`, `internal/llm/router.go`, provider files
+- Add `ResponseFormat: "json"` option to `Request` struct
+- Update `buildDiagnosePrompt` to instruct the model to respond with `{"fix": "...", "explanation": "..."}` JSON only
+- Add JSON unmarshalling in `parseSuggestion` with fallback to current regex for providers that don't support JSON mode
+- Providers supporting JSON mode: Groq (yes), Gemini (yes), Mistral (yes), Nvidia NIM (yes), Ollama (yes via format param)
+- Add tests: malformed LLM response falls back gracefully, valid JSON parsed correctly
+- Branch: `feat/json-response-format`
+
+---
+
+### TASK-054: Session-scoped command history for LLM context
+**Severity:** medium
+**Category:** fix accuracy
+**Description:** Each `nebula run` invocation is completely stateless — the LLM has no idea what commands the user ran before the failing one. Often the fix requires knowing context: "the user ran `git add .` then `git commit` then `git push` failed" is far more diagnostic than just seeing the `git push` error. Recent session commands (last 5–10) should be injected as context.
+
+**Details:**
+- File: `internal/agent/agent.go`, `internal/agent/planner.go`
+- Add `sessionHistory []string` to `Agent` — append each command run via `Run()` (success or fail)
+- In `buildDiagnosePrompt`, prepend: `"Recent commands: git add . (0), git commit -m 'fix' (0), git push (1)"` (command + exit code)
+- Cap at last 10 commands, config option `agent_history_depth`
+- Add test: second command in session has first command in its prompt context
+- Branch: `feat/session-command-history`
+
+---
+
+### TASK-055: Parallel provider fan-out with first-wins routing
+**Severity:** low
+**Category:** latency
+**Description:** The LLM router tries providers sequentially — if Groq is slow (15s), it waits the full 60s timeout before trying Gemini. In practice, latency variance between providers on the same prompt is huge. Fan-out to 2–3 providers simultaneously and use whichever responds first cuts P99 latency by 50–70%.
+
+**Details:**
+- File: `internal/llm/router.go`
+- Add `RouteParallel(ctx, req, n int)` — fire first N providers concurrently, cancel others on first success
+- Use `context.WithCancel` and a result channel; first non-error response wins
+- Fallback to sequential if only 1 provider is configured
+- Config option: `llm_parallel_fanout` (default 2, max 3) — higher = lower latency, higher cost
+- Add tests: slowest provider never used when fast provider responds; cost counter increments for used provider only
+- Branch: `feat/parallel-provider-fanout`
+
+---
+
+## CI Fixes (All Done)
+
+### TASK-043: Fix nebula GoReleaser snapshot — missing LICENSE file (DONE)
+**Severity:** medium
+**Category:** CI/CD
+**Repo:** `sagar0163/nebula`
+**Description:** The GoReleaser CI snapshot job was failing with `"failed to find files to archive: globbing failed for pattern LICENSE: file does not exist"`. The `.goreleaser.yaml` bundled `LICENSE` in every release archive but the file was never committed to the repo.
+
+**Fix:** Added `LICENSE` (MIT, 2026) to repo root and pushed directly to `main`. GoReleaser snapshot now completes successfully. All 3 CI jobs (Test ubuntu, Test macos, GoReleaser snapshot) are green.
+
+---
+
+### TASK-044: Fix ai-code-reviewer CI — requirements never installed (DONE)
+**Severity:** high
+**Category:** CI/CD
+**Repo:** `sagar0163/ai-code-reviewer`
+**Description:** CI workflow ran `pip install pytest` but never installed `requirements.txt`. All tests that imported project dependencies failed at collection time with `ModuleNotFoundError`.
+
+**Fix:** Added `pip install -r requirements.txt` step before the test step in `.github/workflows/ci.yml`. CI is now green.
+
+---
+
+### TASK-045: Fix dungeon-master CI — missing httpx2 dependency (DONE)
+**Severity:** high
+**Category:** CI/CD
+**Repo:** `sagar0163/dungeon-master`
+**Description:** `starlette 1.7.0` migrated `TestClient`'s HTTP backend from `httpx` to `httpx2` (a separate package). All tests importing `fastapi.testclient` failed at collection time with `ImportError`. CI was listing `httpx[httpx2]` (invalid extra) and missing `httpx2` entirely.
+
+**Fix:** Created `requirements-dev.txt` with `httpx2>=2.0.0` (plus `pytest`, `jsonschema`, `tomli`, `tomli-w`) and updated CI to install it. 46 tests passing. PR #30 merged.
+
+---
+
+### TASK-046: Fix Nebula_cli CI — Node 20 NAPI 9 segfault on better-sqlite3 v13 (DONE)
+**Severity:** critical
+**Category:** CI/CD
+**Repo:** `sagar0163/Nebula_cli`
+**Description:** 25 out of 51 integration tests were failing. Root cause: `better-sqlite3@13.0.3` bundles a prebuild compiled with `NAPI_VERSION=10`. Node 20 only provides NAPI 9 — loading the native addon segfaults with exit code 139 on every command that touches `TaxonomySystem` (constructed at module top level in `session.js`), crashing the entire CLI.
+
+**Fix:**
+- Bumped `.nvmrc` from `20` to `24` (Node 24 provides NAPI 10)
+- Updated `.github/workflows/ci.yml` `node-version` to `'24'`
+- Fixed 80 ESLint `no-unused-vars` warnings across ~20 source files (renamed `e`→`_e`, removed unused imports/dead vars)
+- Removed unused private method `#classifyCommand` from `streaming-executioner.js` (lint error)
+
+CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. PR #58 merged.
+
+---
+
 ## How to use this document
 
 1. Pick a task

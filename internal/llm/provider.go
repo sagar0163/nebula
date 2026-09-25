@@ -25,6 +25,9 @@ type Request struct {
 	Tools        []Tool
 	MaxTokens    int
 	Temperature  float64
+	// ResponseFormat hints to the provider to return structured output.
+	// "json" requests JSON-object output where supported; empty means free-form.
+	ResponseFormat string
 }
 
 // Message is a single turn in the conversation.

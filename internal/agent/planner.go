@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -74,10 +75,11 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, 
 	output = p.budgetOutput(ctx, output)
 	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript), failExitCode, history, sessionHistory)
 	req := llm.Request{
-		SystemPrompt: systemPrompt,
-		Messages:     []llm.Message{{Role: "user", Content: prompt}},
-		MaxTokens:    512,
-		Temperature:  0.1,
+		SystemPrompt:   systemPrompt,
+		Messages:       []llm.Message{{Role: "user", Content: prompt}},
+		MaxTokens:      512,
+		Temperature:    0.1,
+		ResponseFormat: "json",
 	}
 
 	tokens, err := p.router.Complete(ctx, llm.WorkloadDiagnose, req)
@@ -205,14 +207,37 @@ Output:
 	}
 
 	prompt += `
-Respond with:
-FIX: <the exact fix command>
-EXPLANATION: <one sentence explaining what went wrong and why the fix works>`
+Respond with valid JSON only — no markdown, no extra text:
+{"fix": "<the exact fix command>", "explanation": "<one sentence explaining what went wrong and why the fix works>"}`
 
 	return prompt
 }
 
 func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
+	// Try JSON first (preferred — structured, unambiguous).
+	trimmed := strings.TrimSpace(response)
+	// Strip markdown code fences if the model wrapped the JSON.
+	if strings.HasPrefix(trimmed, "```") {
+		if i := strings.Index(trimmed[3:], "```"); i >= 0 {
+			trimmed = strings.TrimSpace(trimmed[3 : 3+i])
+			if after, ok := strings.CutPrefix(trimmed, "json"); ok {
+				trimmed = strings.TrimSpace(after)
+			}
+		}
+	}
+	var parsed struct {
+		Fix         string `json:"fix"`
+		Explanation string `json:"explanation"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil && parsed.Fix != "" {
+		return &models.HealSuggestion{
+			OriginalCmd: originalCmd,
+			FixCmd:      parsed.Fix,
+			Explanation: parsed.Explanation,
+		}
+	}
+
+	// Fallback: legacy FIX:/EXPLANATION: line parsing for providers that ignore JSON mode.
 	var fix, explanation string
 	for _, line := range strings.Split(response, "\n") {
 		line = strings.TrimSpace(line)

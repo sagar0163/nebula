@@ -112,6 +112,13 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 
 	go func() {
 		bgCtx := context.Background()
+		defer func() {
+			if r := recover(); r != nil {
+				job.Status = "failed"
+				job.Error = fmt.Sprintf("panic: %v", r)
+				_ = store.UpdateWorkflowJob(bgCtx, job)
+			}
+		}()
 		outputs := make(map[string]string)
 
 		for _, step := range wf.Steps {

@@ -57,7 +57,7 @@ nebula setup                    first-run config wizard
 
 ## Open Tasks
 
-### TASK-010: Bound PTY output capture — prevent OOM on high-volume commands
+### TASK-010: Bound PTY output capture — prevent OOM on high-volume commands (DONE)
 **Severity:** critical
 **Description:** `pty.go:63` captures all PTY output into an unbounded `bytes.Buffer`. A command like `yes` or a build that dumps megabytes will grow the buffer until OOM. The capture buffer must be capped (e.g. keep only the last 512KB), separate from the ring buffer already in `Harness`.
 
@@ -70,7 +70,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-011: Add timeout to all LLM streaming calls
+### TASK-011: Add timeout to all LLM streaming calls (DONE)
 **Severity:** critical
 **Description:** `router.go:44` calls `provider.Complete()` with no deadline. A hung or slow provider hangs the CLI forever — no spinner, no timeout, no fallback.
 
@@ -82,7 +82,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-012: Handle SIGINT — restore terminal and kill child process group
+### TASK-012: Handle SIGINT — restore terminal and kill child process group (DONE)
 **Severity:** high
 **Description:** Ctrl-C during `nebula run` kills nebula but leaves the child running and the terminal in raw mode. User has to type `reset`. `defer term.Restore` does not run on SIGINT.
 
@@ -95,7 +95,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-013: Fix raw mode crash on non-TTY stdin (pipes and CI)
+### TASK-013: Fix raw mode crash on non-TTY stdin (pipes and CI) (DONE)
 **Severity:** high
 **Description:** `pty.go:53` calls `term.MakeRaw(os.Stdin.Fd())` unconditionally. When stdin is a pipe (`echo x | nebula run build`) it fails with "inappropriate ioctl" — completely breaking scripted and CI use.
 
@@ -107,7 +107,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-014: Fix `find -exec` safety classifier bypass
+### TASK-014: Fix `find -exec` safety classifier bypass (DONE)
 **Severity:** high
 **Description:** `safety.go:90-94` classifies commands starting with `find` as read-only/safe. `find /etc -exec rm -rf {} \;` passes as `RiskSafe` — dangerous commands auto-approved.
 
@@ -119,7 +119,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-015: Fix executor tokenization — quoted args break on spaces
+### TASK-015: Fix executor tokenization — quoted args break on spaces (DONE)
 **Severity:** high
 **Description:** `executor.go:33` uses `strings.Fields(suggestion.FixCmd)` to split the fix command. A fix like `git commit -m "fix the bug"` becomes `["git", "commit", "-m", "\"fix", "the", "bug\""]` — wrong args, broken execution.
 
@@ -131,7 +131,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-016: Fix harness ring size 0 — AI transcript feature is inert
+### TASK-016: Fix harness ring size 0 — AI transcript feature is inert (DONE)
 **Severity:** high
 **Description:** `root.go:211` calls `pty.NewHarness(0)`. Every write trims the ring to 0 bytes so `Transcript()` always returns `""`. The "[rolling transcript for AI context]" the package documents is completely unused.
 
@@ -143,7 +143,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-017: Implement workload-aware model selection
+### TASK-017: Implement workload-aware model selection (DONE)
 **Severity:** high
 **Description:** `WorkloadDiagnose`, `WorkloadLearn`, `WorkloadEmbed` are defined but every provider's `selectModel()` only checks `cfg.ModelHeal`. The router's workload concept has zero effect — all calls use the same model.
 
@@ -155,7 +155,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-018: Surface keyring errors — fix silent "no provider" failures
+### TASK-018: Surface keyring errors — fix silent "no provider" failures (DONE)
 **Severity:** medium
 **Description:** `root.go:106-114` does `k, _ := keyring.Get(...)` — errors silently discarded. On headless Linux (no DBus/libsecret), every key lookup fails and the user gets only "no available LLM provider" with no hint why.
 
@@ -167,7 +167,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-019: Add panic recovery to background workflow goroutines
+### TASK-019: Add panic recovery to background workflow goroutines (DONE)
 **Severity:** high
 **Description:** `workflow.go:113` launches background jobs in a goroutine with no `recover()`. A panic in any workflow step crashes the entire nebula process.
 
@@ -179,7 +179,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-006: Fix safety bypass in Executor
+### TASK-006: Fix safety bypass in Executor (DONE)
 **Description:** `Executor.Execute()` hardcodes `safety.RiskMedium` when calling `approvalFn`, bypassing the safety classifier entirely. An LLM-suggested fix like `rm -rf /` would be approved as medium-risk. It must call `safety.Classify()` on the fix command first.
 
 **Details:**
@@ -190,7 +190,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-007: Stream LLM output to terminal in `Ask()`
+### TASK-007: Stream LLM output to terminal in `Ask()` (DONE)
 **Description:** `agent.Ask()` collects all tokens silently then returns the full string. For long responses the user sees a blank terminal for 10-20 seconds. Stream tokens to stdout as they arrive, then also return the full string for callers that need it.
 
 **Details:**
@@ -202,7 +202,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-008: Fix dead `recallPattern` / embedding path
+### TASK-008: Fix dead `recallPattern` / embedding path (DONE)
 **Description:** `Planner.recallPattern()` calls `router.Embed()` but no provider implements `Embed()` — they all return an error, so the semantic memory feature silently does nothing. Either wire up a real embedding provider or remove the dead code path and replace with simpler exact-match recall.
 
 **Details:**
@@ -214,7 +214,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-009: Fix `detectDomain()` ordering and false matches
+### TASK-009: Fix `detectDomain()` ordering and false matches (DONE)
 **Description:** `detectDomain()` checks `writingKeywords` before `codeKeywords`, so "write a node script" routes to the writing assistant instead of code. Also "write" is too broad — it matches every prompt that starts with "write me a…" regardless of subject.
 
 **Details:**

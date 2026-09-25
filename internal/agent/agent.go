@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -89,11 +90,13 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 	result.ExitCode = cmdResult.ExitCode
 
 	// 4. Save command to memory.
-	_ = a.store.SaveCommand(ctx, &models.Command{
+	if err := a.store.SaveCommand(ctx, &models.Command{
 		Raw:      raw,
 		ExitCode: cmdResult.ExitCode,
 		Stdout:   string(cmdResult.Stdout),
-	})
+	}); err != nil {
+		log.Printf("warn: save command: %v", err)
+	}
 
 	// On success the doom-loop fingerprint is reset so a healed state does
 	// not carry stale failure counts into future runs.
@@ -187,11 +190,13 @@ func (a *Agent) Ask(ctx context.Context, input string, stream bool) (string, err
 		fmt.Println()
 	}
 
-	_ = a.store.SaveTask(ctx, &models.Task{
+	if err := a.store.SaveTask(ctx, &models.Task{
 		Input:    input,
 		Response: response,
 		Domain:   domain,
-	})
+	}); err != nil {
+		log.Printf("warn: save task: %v", err)
+	}
 	return response, nil
 }
 

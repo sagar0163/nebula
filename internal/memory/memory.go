@@ -22,7 +22,6 @@ type Store interface {
 	// Pattern learning
 	SavePattern(ctx context.Context, p *models.Pattern) error
 	FindPatternByCmd(ctx context.Context, failCmd string) (*models.Pattern, error)
-	FindSimilarPatterns(ctx context.Context, embedding []float32, topK int) ([]*models.Pattern, error)
 
 	// Permission rules
 	SavePermission(ctx context.Context, p *models.Permission) error

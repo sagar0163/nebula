@@ -269,49 +269,8 @@ func (s *SQLiteStore) FindPatternByCmd(ctx context.Context, failCmd string) (*mo
 	}
 }
 
-// FindSimilarPatterns decodes every stored pattern embedding and returns the
-// top-K patterns whose embedding is most similar to the input, sorted by
 // score descending. Patterns with unreadable embeddings are skipped.
 // A topK <= 0 returns all matches.
-func (s *SQLiteStore) FindSimilarPatterns(ctx context.Context, embedding []float32, topK int) ([]*models.Pattern, error) {
-	patterns := []*models.Pattern{}
-	if err := s.db.SelectContext(ctx, &patterns,
-		`SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at
-			FROM patterns`,
-	); err != nil {
-		return nil, fmt.Errorf("load patterns: %w", err)
-	}
-
-	type scoredPattern struct {
-		pattern *models.Pattern
-		score   float32
-	}
-	results := make([]scoredPattern, 0, len(patterns))
-	for _, p := range patterns {
-		vec, err := gobDecodeFloats(p.Embedding)
-		if err != nil {
-			continue
-		}
-		results = append(results, scoredPattern{pattern: p, score: CosineSimilarity(embedding, vec)})
-	}
-
-	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].score != results[j].score {
-			return results[i].score > results[j].score
-		}
-		return results[i].pattern.UseCount > results[j].pattern.UseCount
-	})
-
-	if topK > 0 && len(results) > topK {
-		results = results[:topK]
-	}
-
-	out := make([]*models.Pattern, len(results))
-	for i := range results {
-		out[i] = results[i].pattern
-	}
-	return out, nil
-}
 
 // SavePermission persists an allow/deny/ask rule, replacing the rule for an
 // already-known pattern.

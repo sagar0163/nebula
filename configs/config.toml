@@ -14,6 +14,13 @@ agent_history_depth = 10
 primary = "groq"
 # Fallback provider when primary is unavailable
 fallback = "ollama"
+# Race this many providers concurrently and keep the first response
+# (default 2, max 3). Set to 1 for strictly sequential failover.
+# Every extra provider in the race is a second billable request that gets
+# cancelled mid-flight, so raising it trades cost for latency.
+parallel_fanout = 2
+# Per-attempt completion timeout in seconds (default 60)
+timeout_seconds = 60
 
 [llm.groq]
 # Set via NEBULA_LLM_GROQ_API_KEY or keyring

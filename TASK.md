@@ -379,7 +379,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-039: Implement smart Head + Tail context slicing in PTY buffer
+### TASK-039: Implement smart Head + Tail context slicing in PTY buffer (DONE)
 **Severity:** medium
 **Category:** performance
 **Description:** `cappedBuffer` in `internal/pty/pty.go` currently only keeps the tail (last N bytes) of command output. When commands fail due to root causes printed early (e.g. initial compiler warnings, missing config, build start errors) followed by thousands of lines of cascade errors, the LLM receives only the tail cascade and misses the actual root cause.

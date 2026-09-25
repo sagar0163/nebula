@@ -3,6 +3,7 @@ package pty
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -301,3 +302,51 @@ func TestHarness_SignalKill(t *testing.T) {
 		t.Fatal("Run did not return in time after context cancellation")
 	}
 }
+
+func TestCappedBuffer_HeadTail(t *testing.T) {
+	cb := newCappedBuffer(300)
+	var input bytes.Buffer
+	input.WriteString("ROOT_CAUSE_ERROR_LINE_1\nROOT_CAUSE_CONFIG_LINE_2\n")
+	for i := 1; i <= 200; i++ {
+		input.WriteString(fmt.Sprintf("cascade error middle noise line %d\n", i))
+	}
+	input.WriteString("FINAL_PANIC_STACK_TRACE_END\n")
+
+	n, err := cb.Write(input.Bytes())
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != input.Len() {
+		t.Fatalf("Write n = %d, want %d", n, input.Len())
+	}
+
+	out := cb.Bytes()
+	if len(out) > 300 {
+		t.Fatalf("output length %d exceeded cap 300", len(out))
+	}
+
+	outStr := string(out)
+	if !strings.Contains(outStr, "ROOT_CAUSE_ERROR_LINE_1") {
+		t.Errorf("missing head root cause in output:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "omitted") {
+		t.Errorf("missing omission marker in output:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "FINAL_PANIC_STACK_TRACE_END") {
+		t.Errorf("missing tail stack trace in output:\n%s", outStr)
+	}
+}
+
+func TestCappedBuffer_NoOverflow(t *testing.T) {
+	cb := newCappedBuffer(1024)
+	input := []byte("short output\nline 2\n")
+	_, err := cb.Write(input)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	out := cb.Bytes()
+	if string(out) != string(input) {
+		t.Fatalf("got %q, want %q", string(out), string(input))
+	}
+}
+

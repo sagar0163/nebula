@@ -91,7 +91,7 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 	if capSize <= 0 {
 		capSize = maxCaptureBytes
 	}
-	capture := &cappedBuffer{buf: &bytes.Buffer{}, cap: capSize}
+	capture := newCappedBuffer(capSize)
 	writer := io.MultiWriter(os.Stdout, capture, h)
 
 	var wg sync.WaitGroup
@@ -118,26 +118,128 @@ func (h *Harness) Run(ctx context.Context, name string, args []string) (*Command
 	}, nil
 }
 
+func newCappedBuffer(maxCap int) *cappedBuffer {
+	headCap := 2048
+	if maxCap/4 < headCap {
+		headCap = maxCap / 4
+	}
+	if headCap < 0 {
+		headCap = 0
+	}
+	return &cappedBuffer{
+		cap:     maxCap,
+		headCap: headCap,
+		head:    &bytes.Buffer{},
+		tail:    &bytes.Buffer{},
+	}
+}
+
 type cappedBuffer struct {
-	mu  sync.Mutex
-	buf *bytes.Buffer
-	cap int
+	mu         sync.Mutex
+	cap        int
+	headCap    int
+	head       *bytes.Buffer
+	tail       *bytes.Buffer
+	totalBytes int64
+	totalLines int64
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.buf.Write(p)
-	if c.buf.Len() > c.cap {
-		c.buf.Next(c.buf.Len() - c.cap)
+
+	c.totalBytes += int64(len(p))
+	c.totalLines += int64(bytes.Count(p, []byte("\n")))
+
+	// Fill head buffer up to headCap
+	if c.head.Len() < c.headCap {
+		need := c.headCap - c.head.Len()
+		if len(p) <= need {
+			c.head.Write(p)
+		} else {
+			c.head.Write(p[:need])
+		}
 	}
+
+	// Append to rolling tail buffer
+	c.tail.Write(p)
+	if c.tail.Len() > c.cap {
+		overflow := c.tail.Len() - c.cap
+		c.tail.Next(overflow)
+	}
+
 	return len(p), nil
 }
 
 func (c *cappedBuffer) Bytes() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.buf.Bytes()
+
+	// If total output is within capacity, return full output
+	if c.totalBytes <= int64(c.cap) {
+		out := make([]byte, c.tail.Len())
+		copy(out, c.tail.Bytes())
+		return out
+	}
+
+	// If capacity is too small for head+marker, fall back to plain tail
+	const minHeadCap = 16
+	if c.headCap < minHeadCap || c.cap < 128 {
+		out := make([]byte, c.tail.Len())
+		copy(out, c.tail.Bytes())
+		if len(out) > c.cap {
+			return out[len(out)-c.cap:]
+		}
+		return out
+	}
+
+	headBytes := c.head.Bytes()
+	headLen := len(headBytes)
+
+	// Rough estimation for tail budget to format marker
+	estMarker := fmt.Sprintf("\n[... %d lines / %d bytes omitted ...]\n", c.totalLines, c.totalBytes)
+	tailBudget := c.cap - headLen - len(estMarker)
+	if tailBudget < 0 {
+		tailBudget = 0
+	}
+
+	tailRaw := c.tail.Bytes()
+	var tailSlice []byte
+	if len(tailRaw) > tailBudget {
+		tailSlice = tailRaw[len(tailRaw)-tailBudget:]
+	} else {
+		tailSlice = tailRaw
+	}
+
+	headLines := int64(bytes.Count(headBytes, []byte("\n")))
+	tailLines := int64(bytes.Count(tailSlice, []byte("\n")))
+	omittedLines := c.totalLines - headLines - tailLines
+	if omittedLines < 0 {
+		omittedLines = 0
+	}
+	omittedBytes := c.totalBytes - int64(headLen) - int64(len(tailSlice))
+	if omittedBytes < 0 {
+		omittedBytes = 0
+	}
+
+	marker := fmt.Sprintf("\n[... %d lines / %d bytes omitted ...]\n", omittedLines, omittedBytes)
+
+	// Re-adjust exact fit with final formatted marker
+	tailBudget = c.cap - headLen - len(marker)
+	if tailBudget < 0 {
+		tailBudget = 0
+	}
+	if len(tailRaw) > tailBudget {
+		tailSlice = tailRaw[len(tailRaw)-tailBudget:]
+	} else {
+		tailSlice = tailRaw
+	}
+
+	res := make([]byte, 0, headLen+len(marker)+len(tailSlice))
+	res = append(res, headBytes...)
+	res = append(res, []byte(marker)...)
+	res = append(res, tailSlice...)
+	return res
 }
 
 // Write implements io.Writer for the ring buffer.

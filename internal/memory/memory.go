@@ -33,6 +33,7 @@ type Store interface {
 	SaveWorkflowJob(ctx context.Context, j *models.WorkflowJob) error
 	GetWorkflowJob(ctx context.Context, id string) (*models.WorkflowJob, error)
 	UpdateWorkflowJob(ctx context.Context, j *models.WorkflowJob) error
+	CancelWorkflowJob(ctx context.Context, id string) error
 	ListWorkflowJobs(ctx context.Context, limit int) ([]*models.WorkflowJob, error)
 
 	Close() error

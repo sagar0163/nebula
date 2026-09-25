@@ -421,3 +421,12 @@ func (s *SQLiteStore) FindPatternsByKeywords(ctx context.Context, keywords []str
 	}
 	return patterns, nil
 }
+
+// CancelWorkflowJob sets the workflow job's status to "cancelled".
+func (s *SQLiteStore) CancelWorkflowJob(ctx context.Context, id string) error {
+	const q = `UPDATE workflow_jobs SET status = 'cancelled', updated_at = ? WHERE id = ?`
+	if _, err := s.db.ExecContext(ctx, q, time.Now().UTC(), id); err != nil {
+		return fmt.Errorf("cancel workflow job %q: %w", id, err)
+	}
+	return nil
+}

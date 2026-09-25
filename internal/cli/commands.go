@@ -369,7 +369,26 @@ func newWorkflowCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(runCmd, statusCmd, resultCmd, listCmd)
+	
+	cancelCmd := &cobra.Command{
+		Use:   "cancel <job-id>",
+		Short: "Cancel a background workflow",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := openStore()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.CancelWorkflowJob(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Job %s cancelled.\n", args[0])
+			return nil
+		},
+	}
+
+	cmd.AddCommand(runCmd, statusCmd, resultCmd, listCmd, cancelCmd)
 	return cmd
 }
 

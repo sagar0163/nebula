@@ -142,6 +142,13 @@ func (wf *Workflow) RunBackground(ctx context.Context, a *agent.Agent, store mem
 		outputs := make(map[string]string)
 
 		for _, step := range wf.Steps {
+			// Check for cancellation
+			if currentJob, err := store.GetWorkflowJob(context.Background(), job.ID); err == nil {
+				if currentJob.Status == "cancelled" {
+					return // gracefully exit
+				}
+			}
+
 			job.CurrentStep = step.Name
 			updateJob(false)
 

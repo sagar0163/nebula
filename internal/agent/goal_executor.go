@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"github.com/sagar0163/nebula/internal/tools"
+	"github.com/sagar0163/nebula/internal/profile"
 	
 )
 
@@ -23,7 +24,9 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 	for i := 0; i < 5; i++ { // limit iterations
 		dir, _ := os.Getwd()
 		codebase := IndexCodebase(dir)
-		steps, err := planner.Plan(ctx, goal, contextData, codebase)
+		userProf := profile.GetUserProfile()
+		projProf := profile.GetProjectProfile(dir)
+		steps, err := planner.Plan(ctx, goal, contextData, codebase, userProf, projProf)
 		if err != nil {
 			return err
 		}

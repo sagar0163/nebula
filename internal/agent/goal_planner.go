@@ -9,6 +9,7 @@ import (
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/models"
 	"github.com/sagar0163/nebula/internal/tools"
+	"github.com/sagar0163/nebula/internal/profile"
 )
 
 type GoalPlanner struct {
@@ -20,13 +21,22 @@ func NewGoalPlanner(router *llm.Router, tr *tools.Registry) *GoalPlanner {
 	return &GoalPlanner{router: router, tools: tr}
 }
 
-func (p *GoalPlanner) Plan(ctx context.Context, goal string, contextData string, codebase CodebaseIndex) ([]models.GoalStep, error) {
+func (p *GoalPlanner) Plan(ctx context.Context, goal string, contextData string, codebase CodebaseIndex, user profile.UserProfile, proj profile.ProjectProfile) ([]models.GoalStep, error) {
 	prompt := fmt.Sprintf(`You are an autonomous agent. Your goal is: %s
 
 %s
 
 Codebase Summary:
 %s
+
+User Profile:
+Name: %s
+Email: %s
+Preferences: %s
+
+Project Profile:
+Repo: %s
+Readme: %s
 
 Context:
 %s
@@ -37,7 +47,7 @@ Break down the goal into a sequence of steps. Respond ONLY with a JSON object in
 		{"tool": "ShellTool", "input": {"command": "ls -la"}},
 		{"tool": "ReadFileTool", "input": {"path": "main.go"}}
 	]
-}`, goal, p.tools.FormatPrompt(), codebase.Summary(), contextData)
+}`, goal, p.tools.FormatPrompt(), codebase.Summary(), user.Name, user.Email, user.LanguagePreferences, proj.RepoURL, proj.ReadmeIntro, contextData)
 
 	req := llm.Request{
 		Messages:       []llm.Message{{Role: "user", Content: prompt}},

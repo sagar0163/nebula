@@ -437,7 +437,7 @@ func TestRouterParallelFastProviderWins(t *testing.T) {
 
 	r := NewRouter()
 	slow := &stubProvider{name: "slow", available: true, delay: 3 * time.Second, response: "slow-ok"}
-	fast := &stubProvider{name: "fast", available: true, response: "fast-ok"}
+	fast := &stubProvider{name: "fast", available: true, delay: 10 * time.Millisecond, response: "fast-ok"}
 	r.Register(WorkloadHeal, slow)
 	r.Register(WorkloadHeal, fast)
 
@@ -593,7 +593,7 @@ func TestRouterParallelConcurrentComplete(t *testing.T) {
 	fanoutTestConfig(t, 2, 30)
 
 	r := NewRouter()
-	fast := &stubProvider{name: "fast", available: true, response: "fast-ok"}
+	fast := &stubProvider{name: "fast", available: true, delay: 10 * time.Millisecond, response: "fast-ok"}
 	slow := &stubProvider{name: "slow", available: true, delay: 20 * time.Millisecond, response: "slow-ok"}
 	r.Register(WorkloadHeal, fast)
 	r.Register(WorkloadHeal, slow)

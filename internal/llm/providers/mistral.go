@@ -140,3 +140,10 @@ func (p *MistralProvider) selectModel(req llm.Request) string {
 	}
 	return "mistral-large-latest"
 }
+
+// Model reports the model this provider uses for a workload tier. It is the
+// same resolution Complete performs, exposed so callers that need to label or
+// price a run do not have to duplicate the defaults.
+func (p *MistralProvider) Model(w llm.Workload) string {
+	return p.selectModel(llm.Request{Workload: w})
+}

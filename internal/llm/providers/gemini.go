@@ -144,6 +144,13 @@ func (p *GeminiProvider) selectModel(req llm.Request) string {
 	return "gemini-2.5-pro"
 }
 
+// Model reports the model this provider uses for a workload tier. It is the
+// same resolution Complete performs, exposed so callers that need to label or
+// price a run do not have to duplicate the defaults.
+func (p *GeminiProvider) Model(w llm.Workload) string {
+	return p.selectModel(llm.Request{Workload: w})
+}
+
 // toGeminiParts converts llm.Messages to genai.Part slice for the last user turn.
 // Gemini's GenerateContentStream takes a flat list of parts for the current turn.
 func toGeminiParts(msgs []llm.Message) []genai.Part {

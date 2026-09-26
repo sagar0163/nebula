@@ -243,6 +243,27 @@ Command: %s
 		}
 	}
 
+	// Build a de-duplicated list of already-tried fix commands to explicitly
+	// forbid the model from repeating them.
+	if len(history) > 0 {
+		seen := make(map[string]bool)
+		var tried []string
+		for _, h := range history {
+			cmd := strings.TrimSpace(h.FixCmd)
+			if cmd != "" && !seen[cmd] {
+				seen[cmd] = true
+				tried = append(tried, cmd)
+			}
+		}
+		if len(tried) > 0 {
+			prompt += "IMPORTANT: The following commands have already been tried and failed. Do NOT suggest any of them again — proposing a previously failed fix is wrong:\n"
+			for _, t := range tried {
+				prompt += fmt.Sprintf("  - %s\n", t)
+			}
+			prompt += "\n"
+		}
+	}
+
 	prompt += `
 Respond with valid JSON only — no markdown, no extra text:
 {"fix": "<the exact fix command>", "explanation": "<one sentence explaining what went wrong and why the fix works>", "reasoning": "<your diagnosis of root cause and why this fix should work>", "confidence": <0.0-1.0>}`

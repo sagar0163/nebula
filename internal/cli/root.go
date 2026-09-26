@@ -16,7 +16,6 @@ import (
 	"github.com/sagar0163/nebula/internal/agent"
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/llm/providers"
-	"github.com/sagar0163/nebula/internal/memory"
 	"github.com/sagar0163/nebula/internal/pty"
 	"github.com/sagar0163/nebula/internal/safety"
 	"github.com/sagar0163/nebula/internal/tui"
@@ -67,6 +66,7 @@ func init() {
 		newSkillCmd(),
 		newWorkflowCmd(),
 		newWatchCmd(),
+		newEvalCmd(),
 		newVersionCmd(),
 	)
 }
@@ -133,49 +133,88 @@ func loadKeys(baseKey, configVal, envVar string) []string {
 
 // buildAgent constructs the agent from viper config.
 func buildAgent() (*agent.Agent, error) {
-	// Memory store.
-	home, _ := os.UserHomeDir()
-	dbPath := viper.GetString("memory.db_path")
-	if dbPath == "" {
-		dbPath = filepath.Join(home, ".local", "share", "nebula", "nebula.db")
-	}
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create data dir: %w", err)
-	}
-	store, err := memory.New(dbPath)
+	store, err := openStore()
 	if err != nil {
-		return nil, fmt.Errorf("open memory store: %w", err)
+		return nil, err
 	}
 
-	// LLM router.
+	return agent.New(newHarness(), buildRouter("", nil), store, agent.Config{
+		HistoryDepth:  historyDepth(),
+		FileInjection: fileInjectionEnabled(),
+	}), nil
+}
+
+// newHarness builds the PTY harness from the [pty] config section.
+func newHarness() *pty.Harness {
+	ringKB := viper.GetInt("pty.ring_kb")
+	if ringKB == 0 {
+		ringKB = 256
+	}
+	capKB := viper.GetInt("pty.capture_kb")
+	if capKB == 0 {
+		capKB = 512
+	}
+	return pty.NewHarness(ringKB*1024, capKB*1024)
+}
+
+func historyDepth() int {
+	depth := viper.GetInt("agent.agent_history_depth")
+	if depth <= 0 {
+		return 10
+	}
+	return depth
+}
+
+func fileInjectionEnabled() bool {
+	if viper.IsSet("agent.agent_file_injection") {
+		return viper.GetBool("agent.agent_file_injection")
+	}
+	return true
+}
+
+// buildRouter registers every provider that has a key (or an ollama base URL)
+// for the workloads it serves. Keys are always read through loadKeys, which
+// never writes them to disk.
+//
+// When only is non-empty, providers whose Name() differs are left
+// unregistered, which is how `nebula eval` pins a run to a single backend. wrap,
+// when non-nil, decorates each provider before registration; the eval command
+// uses it to meter token usage without touching the providers themselves.
+func buildRouter(only string, wrap func(llm.Provider) llm.Provider) *llm.Router {
 	router := llm.NewRouter()
 
+	register := func(p llm.Provider, workloads ...llm.Workload) {
+		if p == nil {
+			return
+		}
+		if only != "" && p.Name() != only {
+			return
+		}
+		if wrap != nil {
+			p = wrap(p)
+		}
+		for _, w := range workloads {
+			router.Register(w, p)
+		}
+	}
+
 	for _, k := range loadKeys("groq_api_key", viper.GetString("llm.groq.api_key"), "NEBULA_GROQ_KEY") {
-		if p := providers.NewGroq(providers.GroqConfig{
+		register(providers.NewGroq(providers.GroqConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.groq.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.groq.model_heal"),
 			ModelLearn:    viper.GetString("llm.groq.model_learn"),
-		}); p != nil {
-			router.Register(llm.WorkloadDiagnose, p)
-			router.Register(llm.WorkloadHeal, p)
-			router.Register(llm.WorkloadLearn, p)
-		}
+		}), llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn)
 	}
 
 	for _, k := range loadKeys("gemini_api_key", viper.GetString("llm.gemini.api_key"), "NEBULA_GEMINI_KEY") {
-		if p := providers.NewGemini(providers.GeminiConfig{
+		register(providers.NewGemini(providers.GeminiConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.gemini.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.gemini.model_heal"),
 			ModelLearn:    viper.GetString("llm.gemini.model_learn"),
 			ModelEmbed:    viper.GetString("llm.gemini.model_embed"),
-		}); p != nil {
-			router.Register(llm.WorkloadDiagnose, p)
-			router.Register(llm.WorkloadHeal, p)
-			router.Register(llm.WorkloadLearn, p)
-			router.Register(llm.WorkloadEmbed, p)
-		}
+		}), llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn, llm.WorkloadEmbed)
 	}
 
 	if base := viper.GetString("llm.ollama.base_url"); base != "" {
@@ -187,67 +226,32 @@ func buildAgent() (*agent.Agent, error) {
 			ModelEmbed:    viper.GetString("llm.ollama.model_embed"),
 		})
 		if err == nil {
-			router.Register(llm.WorkloadDiagnose, p)
-			router.Register(llm.WorkloadHeal, p)
-			router.Register(llm.WorkloadLearn, p)
-			router.Register(llm.WorkloadEmbed, p)
+			register(p, llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn, llm.WorkloadEmbed)
 		}
 	}
 
 	for _, k := range loadKeys("mistral_api_key", viper.GetString("llm.mistral.api_key"), "NEBULA_MISTRAL_KEY") {
-		if p := providers.NewMistral(providers.MistralConfig{
+		register(providers.NewMistral(providers.MistralConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.mistral.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.mistral.model_heal"),
 			ModelLearn:    viper.GetString("llm.mistral.model_learn"),
 			ModelEmbed:    viper.GetString("llm.mistral.model_embed"),
-		}); p != nil {
-			router.Register(llm.WorkloadDiagnose, p)
-			router.Register(llm.WorkloadHeal, p)
-			router.Register(llm.WorkloadLearn, p)
-			router.Register(llm.WorkloadEmbed, p)
-		}
+		}), llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn, llm.WorkloadEmbed)
 	}
 
 	for _, k := range loadKeys("nvidia_api_key", viper.GetString("llm.nvidia.api_key"), "NEBULA_NVIDIA_KEY") {
-		if p := providers.NewNvidia(providers.NvidiaConfig{
+		register(providers.NewNvidia(providers.NvidiaConfig{
 			APIKey:        k,
 			BaseURL:       viper.GetString("llm.nvidia.base_url"),
 			ModelDiagnose: viper.GetString("llm.nvidia.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.nvidia.model_heal"),
 			ModelLearn:    viper.GetString("llm.nvidia.model_learn"),
 			ModelEmbed:    viper.GetString("llm.nvidia.model_embed"),
-		}); p != nil {
-			router.Register(llm.WorkloadDiagnose, p)
-			router.Register(llm.WorkloadHeal, p)
-			router.Register(llm.WorkloadLearn, p)
-			router.Register(llm.WorkloadEmbed, p)
-		}
+		}), llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn, llm.WorkloadEmbed)
 	}
 
-	ringKB := viper.GetInt("pty.ring_kb")
-	if ringKB == 0 {
-		ringKB = 256
-	}
-	capKB := viper.GetInt("pty.capture_kb")
-	if capKB == 0 {
-		capKB = 512
-	}
-	harness := pty.NewHarness(ringKB*1024, capKB*1024)
-	
-	depth := viper.GetInt("agent.agent_history_depth")
-	if depth <= 0 {
-		depth = 10
-	}
-	inj := true
-	if viper.IsSet("agent.agent_file_injection") {
-		inj = viper.GetBool("agent.agent_file_injection")
-	}
-	
-	return agent.New(harness, router, store, agent.Config{
-		HistoryDepth: depth,
-		FileInjection: inj,
-	}), nil
+	return router
 }
 
 // agentAdapter wraps *agent.Agent to satisfy tui.AgentRunner,

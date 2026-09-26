@@ -1,0 +1,1 @@
+Go build fails: main.go uses the strings package without importing it

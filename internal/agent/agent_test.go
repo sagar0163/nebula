@@ -810,6 +810,29 @@ func TestRunSucceedsWithoutDoomIncrement(t *testing.T) {
 	}
 }
 
+// Reset drops the doom-loop fingerprints so a reused agent starts clean; the
+// eval harness depends on this between fixtures.
+func TestResetClearsDoomLoopCounts(t *testing.T) {
+	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})
+
+	a.doomMu.Lock()
+	a.doomLoopCounts["cmd-0"] = 3
+	a.doomLoopCounts["cmd-1"] = 1
+	a.doomMu.Unlock()
+
+	a.Reset()
+
+	a.doomMu.Lock()
+	defer a.doomMu.Unlock()
+	if len(a.doomLoopCounts) != 0 {
+		t.Fatalf("Reset left doom loop counts behind: %+v", a.doomLoopCounts)
+	}
+	if a.doomLoopCounts == nil {
+		t.Fatal("Reset must leave a usable map behind, not a nil one")
+	}
+	a.doomLoopCounts["cmd-0"] = 1 // panics on a nil map
+}
+
 func TestRunNilContextDoesNotPanic(t *testing.T) {
 	defer stdinTTY(t)()
 	a := New(pty.NewHarness(0, 512*1024), llm.NewRouter(), newTestStore(t), Config{HistoryDepth: 10})

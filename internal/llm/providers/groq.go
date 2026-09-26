@@ -120,6 +120,13 @@ func (p *GroqProvider) selectModel(req llm.Request) string {
 	return "llama-3.3-70b-versatile"
 }
 
+// Model reports the model this provider uses for a workload tier. It is the
+// same resolution Complete performs, exposed so callers that need to label or
+// price a run do not have to duplicate the defaults.
+func (p *GroqProvider) Model(w llm.Workload) string {
+	return p.selectModel(llm.Request{Workload: w})
+}
+
 // buildOpenAIMessages converts llm.Request messages to openai-go param slice.
 func buildOpenAIMessages(req llm.Request) []openai.ChatCompletionMessageParamUnion {
 	var msgs []openai.ChatCompletionMessageParamUnion

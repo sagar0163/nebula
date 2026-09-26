@@ -55,6 +55,14 @@ func New(harness *pty.Harness, router *llm.Router, store memory.Store, cfg Confi
 	}
 }
 
+// Reset clears accumulated per-run state so the agent can be reused across
+// independent invocations without carrying over doom-loop fingerprints.
+func (a *Agent) Reset() {
+	a.doomMu.Lock()
+	a.doomLoopCounts = make(map[string]int)
+	a.doomMu.Unlock()
+}
+
 // RunResult is the outcome of running a command through the agent.
 type RunResult struct {
 	Command       string
@@ -324,6 +332,7 @@ type RunOptions struct {
 
 const systemPrompt = `You are Nebula, a self-healing terminal agent.
 Your job is to analyze failed shell commands and suggest precise fixes.
+Never repeat a fix that has already been attempted. If previous fixes made the error worse, the approach is fundamentally wrong — try a completely different strategy.
 Be concise. Only suggest commands that are safe and reversible where possible.`
 
 const codeSystemPrompt = `You are Nebula, an expert coding assistant. Help with code review, debugging, refactoring, and writing code in any language. Be precise and show working examples.`

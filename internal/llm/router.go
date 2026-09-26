@@ -400,6 +400,23 @@ func isRL(msg string) bool {
 		strings.Contains(msg, "quota exceeded")
 }
 
+// Model returns the model the best available provider for the workload would
+// use, or "" when no registered provider knows. Callers use it to label or
+// price a run without reaching into provider internals.
+func (r *Router) Model(ctx context.Context, w Workload) string {
+	for _, p := range r.chain(w) {
+		if !p.Available(ctx) {
+			continue
+		}
+		if mp, ok := p.(interface{ Model(Workload) string }); ok {
+			if model := mp.Model(w); model != "" {
+				return model
+			}
+		}
+	}
+	return ""
+}
+
 // ContextWindow returns the context window token limit for the best available
 // provider for the given workload. If unknown or unavailable, returns 4096.
 func (r *Router) ContextWindow(ctx context.Context, w Workload) int {

@@ -145,3 +145,10 @@ func (p *NvidiaProvider) selectModel(req llm.Request) string {
 	}
 	return "meta/llama-3.1-405b-instruct"
 }
+
+// Model reports the model this provider uses for a workload tier. It is the
+// same resolution Complete performs, exposed so callers that need to label or
+// price a run do not have to duplicate the defaults.
+func (p *NvidiaProvider) Model(w llm.Workload) string {
+	return p.selectModel(llm.Request{Workload: w})
+}

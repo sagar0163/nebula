@@ -3,6 +3,8 @@ package agent
 import (
 	"testing"
 	"context"
+	"strings"
+
 	"github.com/sagar0163/nebula/internal/memory"
 	"github.com/sagar0163/nebula/internal/models"
 )
@@ -95,5 +97,27 @@ func TestRecallPatternChain(t *testing.T) {
 	s3, _ := planner.recallPattern(context.Background(), "git push", "error: failed to push", 2)
 	if s3 == nil || s3.FixCmd != "git push -u origin main" {
 		t.Errorf("expected git push -u origin main, got %+v", s3)
+	}
+}
+
+func TestBuildDiagnosePrompt_NoDuplicateFixes(t *testing.T) {
+	history := []models.TurnRecord{
+		{
+			FixCmd:    `import "strings"`,
+			Output:    "cannot use \"twelve\" (untyped string constant) as int value",
+			ExitCode:  1,
+			Reasoning: "The error mentions a string, so strings is probably needed.",
+		},
+	}
+
+	prompt := buildDiagnosePrompt("go build ./...", "cannot use \"twelve\" as int", "", 1, history, nil, false)
+
+	lower := strings.ToLower(prompt)
+	if !strings.Contains(lower, "already been tried") && !strings.Contains(lower, "do not suggest") {
+		t.Errorf("prompt missing anti-repetition guard; got:\n%s", prompt)
+	}
+
+	if !strings.Contains(prompt, `import "strings"`) {
+		t.Errorf("prompt does not list the tried fix command %q; got:\n%s", `import "strings"`, prompt)
 	}
 }

@@ -124,6 +124,13 @@ func (p *OllamaProvider) selectModel(req llm.Request) string {
 	return "llama3.2"
 }
 
+// Model reports the model this provider uses for a workload tier. It is the
+// same resolution Complete performs, exposed so callers that need to label or
+// price a run do not have to duplicate the defaults.
+func (p *OllamaProvider) Model(w llm.Workload) string {
+	return p.selectModel(llm.Request{Workload: w})
+}
+
 // buildPrompt collapses llm.Request messages into a single Ollama prompt string.
 func buildPrompt(req llm.Request) string {
 	var out string

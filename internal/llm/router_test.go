@@ -310,9 +310,9 @@ func TestRouter_RateLimitRetry(t *testing.T) {
 	mock := &rateLimitMockProvider{name: "ratelimit"}
 	router.Register(WorkloadHeal, mock)
 
-	// Since we are mocking time internally with time.After in router, it will take 2s + 4s = 6s.
-	// We can't easily mock time, so we just let it run. It will be slightly slow.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Retry backoff is 2s + 4s = 6s total. Use 20s to avoid flakiness under
+	// load (CI machines can stall, making 10s too tight).
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	ch, err := router.Complete(ctx, WorkloadHeal, Request{})

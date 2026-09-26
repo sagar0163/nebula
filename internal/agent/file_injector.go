@@ -3,16 +3,38 @@ package agent
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
 
 func ExtractRelevantFiles(cmd, output string, maxFiles int) []string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+
+	// isSafe rejects paths that escape cwd or are absolute — prevents
+	// attacker-controlled error output from injecting ../../../etc/passwd.go.
+	isSafe := func(p string) bool {
+		if filepath.IsAbs(p) {
+			return false
+		}
+		clean := filepath.Clean(p)
+		// filepath.Clean turns "../foo" into ".." + sep + "foo"; a Rel that
+		// starts with ".." means the path escapes the working directory.
+		rel, err := filepath.Rel(cwd, filepath.Join(cwd, clean))
+		if err != nil {
+			return false
+		}
+		return !strings.HasPrefix(rel, "..")
+	}
+
 	var paths []string
 	seen := make(map[string]bool)
 
 	addPath := func(p string) {
-		if !seen[p] && len(paths) < maxFiles {
+		if !seen[p] && len(paths) < maxFiles && isSafe(p) {
 			seen[p] = true
 			paths = append(paths, p)
 		}

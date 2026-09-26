@@ -80,11 +80,13 @@ func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestio
 		promptCmd = fmt.Sprintf("Fix suggestion (confidence: %.0f%%): %s", suggestion.Confidence*100, suggestion.FixCmd)
 	}
 
+	// Auto-approve only when BOTH confidence is high AND the command is
+	// classified safe or low-risk. Explicitly enumerate the allowed risk
+	// levels so adding new tiers never silently expands auto-approve scope.
 	needsApproval := true
-	if suggestion.Confidence >= 0.85 && risk <= safety.RiskLow {
+	if suggestion.Confidence >= 0.85 &&
+		(risk == safety.RiskSafe || risk == safety.RiskLow) {
 		needsApproval = false
-	} else if suggestion.Confidence < 0.6 {
-		needsApproval = true
 	}
 
 	if needsApproval {

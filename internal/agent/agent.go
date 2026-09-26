@@ -114,13 +114,16 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 		log.Printf("warn: save command: %v", err)
 	}
 
-	// On success the doom-loop fingerprint is reset so a healed state does
-	// not carry stale failure counts into future runs.
+	// On success clear all doom-loop counts for this command so healed state
+	// doesn't carry stale failure counts. Counts are keyed "%x-%d" (hash +
+	// turn index), so we delete every turn slot (0..maxTurns).
 	if cmdResult.ExitCode == 0 {
 		outHash := sha256.Sum256(append([]byte(raw), cmdResult.Stdout...))
-		fingerprint := fmt.Sprintf("%x-0", outHash[:8])
+		prefix := fmt.Sprintf("%x", outHash[:8])
 		a.doomMu.Lock()
-		delete(a.doomLoopCounts, fingerprint)
+		for i := 0; i <= 6; i++ {
+			delete(a.doomLoopCounts, fmt.Sprintf("%s-%d", prefix, i))
+		}
 		a.doomMu.Unlock()
 	}
 
@@ -233,85 +236,23 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 // Ask handles a general-purpose request in any domain, streaming the LLM
 // response and returning the full string. The task is saved to memory.
 
-// levenshtein computes the edit distance between two strings
-func levenshtein(s, t string) int {
-	if len(s) == 0 {
-		return len(t)
-	}
-	if len(t) == 0 {
-		return len(s)
-	}
-	d := make([][]int, len(s)+1)
-	for i := range d {
-		d[i] = make([]int, len(t)+1)
-		d[i][0] = i
-	}
-	for j := range d[0] {
-		d[0][j] = j
-	}
-	for j := 1; j <= len(t); j++ {
-		for i := 1; i <= len(s); i++ {
-			if s[i-1] == t[j-1] {
-				d[i][j] = d[i-1][j-1]
-			} else {
-				min := d[i-1][j] + 1
-				if d[i][j-1]+1 < min {
-					min = d[i][j-1] + 1
-				}
-				if d[i-1][j-1]+1 < min {
-					min = d[i-1][j-1] + 1
-				}
-				d[i][j] = min
-			}
-		}
-	}
-	return d[len(s)][len(t)]
-}
 
 func progressCheck(prevExit int, prevOut string, newExit int, newOut string) bool {
 	if prevExit != newExit {
 		return true
 	}
-	// length difference check (> 10%)
-	diff := len(prevOut) - len(newOut)
-	if diff < 0 {
-		diff = -diff
-	}
-	maxLen := len(prevOut)
-	if len(newOut) > maxLen {
-		maxLen = len(newOut)
-	}
-	if maxLen > 0 && float64(diff)/float64(maxLen) > 0.10 {
-		return true
+
+	// Identical content — definitely no progress.
+	if prevOut == newOut {
+		return false
 	}
 
-	// Keyword check (error, panic, fatal)
-	kwds := []string{"error", "panic", "fatal", "failed"}
-	prevOutLower := strings.ToLower(prevOut)
-	newOutLower := strings.ToLower(newOut)
-	for _, kw := range kwds {
-		if strings.Contains(prevOutLower, kw) != strings.Contains(newOutLower, kw) {
-			return true
-		}
-	}
-	
-	// Edit distance difference > 10%
-	// Optimization: if strings are > 1000 chars, only check first 1000 to avoid O(N^2) explosion
-	s1 := prevOut
-	if len(s1) > 1000 {
-		s1 = s1[:1000]
-	}
-	s2 := newOut
-	if len(s2) > 1000 {
-		s2 = s2[:1000]
-	}
-	
-	dist := levenshtein(s1, s2)
-	maxL := len(s1)
-	if len(s2) > maxL {
-		maxL = len(s2)
-	}
-	if maxL > 0 && float64(dist)/float64(maxL) > 0.10 {
+	// Content hash changed — output mutated even if length is similar.
+	// This catches "error: undefined foo" → "error: undefined bar" which the
+	// length and keyword checks both miss.
+	prevHash := sha256.Sum256([]byte(prevOut))
+	newHash := sha256.Sum256([]byte(newOut))
+	if prevHash != newHash {
 		return true
 	}
 

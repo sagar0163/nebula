@@ -56,6 +56,9 @@ type Provider interface {
 	// Name returns the provider identifier (e.g. "gemini", "groq", "ollama").
 	Name() string
 
+	// ModelName returns the specific model string used for the given workload.
+	ModelName(w Workload) string
+
 	// Available reports whether the provider is reachable (has key, model exists).
 	Available(ctx context.Context) bool
 

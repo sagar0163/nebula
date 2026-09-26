@@ -322,3 +322,7 @@ func rateFor(model string) (rate, bool) {
 	}
 	return found, best != ""
 }
+
+func (mp *meteredProvider) ModelName(w llm.Workload) string {
+	return mp.inner.ModelName(w)
+}

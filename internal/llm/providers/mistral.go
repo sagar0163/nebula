@@ -147,3 +147,14 @@ func (p *MistralProvider) selectModel(req llm.Request) string {
 func (p *MistralProvider) Model(w llm.Workload) string {
 	return p.selectModel(llm.Request{Workload: w})
 }
+
+func (p *MistralProvider) ModelName(w llm.Workload) string {
+	switch w {
+	case llm.WorkloadHeal:
+		return p.cfg.ModelHeal
+	case llm.WorkloadLearn:
+		return p.cfg.ModelLearn
+	default:
+		return p.cfg.ModelDiagnose
+	}
+}

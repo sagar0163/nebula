@@ -160,3 +160,14 @@ func toGeminiParts(msgs []llm.Message) []genai.Part {
 	}
 	return parts
 }
+
+func (p *GeminiProvider) ModelName(w llm.Workload) string {
+	switch w {
+	case llm.WorkloadHeal:
+		return p.cfg.ModelHeal
+	case llm.WorkloadLearn:
+		return p.cfg.ModelLearn
+	default:
+		return p.cfg.ModelDiagnose
+	}
+}

@@ -156,3 +156,14 @@ func applyResponseFormat(params *openai.ChatCompletionNewParams, req llm.Request
 		OfJSONObject: &shared.ResponseFormatJSONObjectParam{Type: "json_object"},
 	}
 }
+
+func (p *GroqProvider) ModelName(w llm.Workload) string {
+	switch w {
+	case llm.WorkloadHeal:
+		return p.cfg.ModelHeal
+	case llm.WorkloadLearn:
+		return p.cfg.ModelLearn
+	default:
+		return p.cfg.ModelDiagnose
+	}
+}

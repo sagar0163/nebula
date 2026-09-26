@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"github.com/sagar0163/nebula/internal/tools"
 	
 )
@@ -20,7 +21,9 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 	contextData := "Started goal execution."
 	
 	for i := 0; i < 5; i++ { // limit iterations
-		steps, err := planner.Plan(ctx, goal, contextData)
+		dir, _ := os.Getwd()
+		codebase := IndexCodebase(dir)
+		steps, err := planner.Plan(ctx, goal, contextData, codebase)
 		if err != nil {
 			return err
 		}

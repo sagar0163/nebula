@@ -883,7 +883,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-064: Project-wide codebase awareness
+### TASK-064: Project-wide codebase awareness (DONE)
 **Severity:** high
 **Category:** intelligence
 **Description:** Current file injection reads only files mentioned in error output. A general agent needs to understand the whole project: directory structure, key files, conventions, recent git history. When given "fix the Blueprint empty-name bug", it must find `src/flask/blueprints.py` on its own — not wait for an error to mention it.

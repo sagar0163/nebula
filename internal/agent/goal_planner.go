@@ -20,9 +20,12 @@ func NewGoalPlanner(router *llm.Router, tr *tools.Registry) *GoalPlanner {
 	return &GoalPlanner{router: router, tools: tr}
 }
 
-func (p *GoalPlanner) Plan(ctx context.Context, goal string, contextData string) ([]models.GoalStep, error) {
+func (p *GoalPlanner) Plan(ctx context.Context, goal string, contextData string, codebase CodebaseIndex) ([]models.GoalStep, error) {
 	prompt := fmt.Sprintf(`You are an autonomous agent. Your goal is: %s
 
+%s
+
+Codebase Summary:
 %s
 
 Context:
@@ -34,7 +37,7 @@ Break down the goal into a sequence of steps. Respond ONLY with a JSON object in
 		{"tool": "ShellTool", "input": {"command": "ls -la"}},
 		{"tool": "ReadFileTool", "input": {"path": "main.go"}}
 	]
-}`, goal, p.tools.FormatPrompt(), contextData)
+}`, goal, p.tools.FormatPrompt(), codebase.Summary(), contextData)
 
 	req := llm.Request{
 		Messages:       []llm.Message{{Role: "user", Content: prompt}},

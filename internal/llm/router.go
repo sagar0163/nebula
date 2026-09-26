@@ -431,6 +431,12 @@ func (r *Router) ContextWindow(ctx context.Context, w Workload) int {
 				return tokens
 			}
 		}
+		
+		// Priority 2: Use the Dynamic Model Registry
+		modelName := p.ModelName(w)
+		if limit := GetContextWindow(modelName); limit > 0 {
+			return limit
+		}
 		switch p.Name() {
 		case "gemini":
 			return 1_000_000

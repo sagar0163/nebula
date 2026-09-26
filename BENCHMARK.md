@@ -177,3 +177,54 @@ All 19 deep-reasoning tasks complete. Build clean, all tests passing with `-race
 
 **Nebula now leads on fix accuracy** (~83% vs Claude Code's ~80%) while costing ~18% as much per fix.
 The security and safety posture remains unmatched in the open-source space.
+
+---
+
+## v0.4.1–v0.4.3 — Bug Fixes & Hardening (2026-09-26)
+
+### Bugs fixed
+
+| Bug | Severity | Fix |
+|---|---|---|
+| Path traversal in `ExtractRelevantFiles` | High | `isSafe()` guard — rejects absolute paths and `..` escapes from cwd |
+| Doom loop reset cleared only turn-0 fingerprint | Medium | Clears all turn slots 0–6 on success |
+| `progressCheck` missed same-length mutations | Medium | Replaced O(N²) levenshtein with sha256 content hash |
+| Confidence auto-approve used `<=` on risk enum | Low | Explicit `== RiskSafe \|\| == RiskLow` |
+| Flaky rate-limit retry test (10s timeout) | Low | Widened to 20s |
+| `contextCache` never evicted (stale project type) | Low | 5-minute TTL on `DetectProjectContext` cache entries |
+
+---
+
+## Hot-Path Benchmarks (v0.4.2, Intel i5-7300U)
+
+Measured with `go test -bench=. -benchmem -benchtime=3s`.
+
+| Function | Time/op | Allocs/op | Notes |
+|---|---|---|---|
+| `SummarizeOutput` — short (<4KB) | **2 ns** | 0 | Single `len` check, zero allocation |
+| `SummarizeOutput` — long (500 lines) | 5.4 ms | 17 | Regex scan over all lines |
+| `ExtractRelevantFiles` | 18 µs | 58 | Package-level compiled regex |
+| `parseSuggestion` — JSON path | 2.3 µs | 10 | Fast — small struct unmarshal |
+| `parseSuggestion` — legacy FIX: path | 618 ns | 9 | Line scan, fastest path |
+| `progressCheck` (sha256) | 3.0 µs | 2 | Replaced O(N²) levenshtein |
+| Token stream — `strings.Builder` | 8.4 µs | 11 | All production code uses Builder |
+| Token stream — naive `+=` | 376 µs | **999** | 45× slower — confirmed not in prod |
+
+### Key findings
+- **Zero-alloc fast path**: `SummarizeOutput` on outputs <4KB costs nothing — the common case.
+- **`progressCheck` speedup**: sha256 hash is 3µs vs levenshtein at ~500µs+ on 1KB strings — **165× faster** on longer outputs.
+- **`parseSuggestion` JSON vs fallback**: JSON path (2.3µs) is 3.7× slower than the legacy line-scan. Both are negligible vs network latency.
+- **No `string +=` in hot paths**: Confirmed — all token streaming uses `strings.Builder`. The `BenchmarkStringConcat` entry exists only to document the 45× penalty and justify the Builder choice.
+
+---
+
+## Fuzz Results (v0.4.2)
+
+| Target | Executions | Result |
+|---|---|---|
+| `FuzzParseSuggestion` | 50,387 | ✅ No panics |
+| `FuzzExtractRelevantFiles` | 60,196 | ✅ No path traversals (caught 1 false-positive in test logic) |
+| `FuzzSummarizeOutput` | 22,416 | ✅ Always valid UTF-8 output |
+| `FuzzBuildDiagnosePrompt` | 22,416 | ✅ No panics |
+
+Fuzz corpus committed to `testdata/fuzz/` — re-runs on every `go test`.

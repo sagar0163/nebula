@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type ProjectContext struct {
@@ -18,9 +19,14 @@ func (p ProjectContext) String() string {
 	return "Project: " + p.Language + ", Build tool: " + p.BuildTool
 }
 
-var (
-	contextCache sync.Map
-)
+const contextCacheTTL = 5 * time.Minute
+
+type contextEntry struct {
+	ctx       ProjectContext
+	expiresAt time.Time
+}
+
+var contextCache sync.Map
 
 func DetectProjectContext(dir string) ProjectContext {
 	if dir == "" {
@@ -30,14 +36,18 @@ func DetectProjectContext(dir string) ProjectContext {
 			return ProjectContext{}
 		}
 	}
-	
+
 	if val, ok := contextCache.Load(dir); ok {
-		return val.(ProjectContext)
+		entry := val.(contextEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.ctx
+		}
+		// TTL expired — evict and re-detect
+		contextCache.Delete(dir)
 	}
 
 	ctx := ProjectContext{}
 
-	// Basic heuristics
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 		ctx = ProjectContext{Language: "Go", BuildTool: "go build"}
 	} else if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
@@ -54,11 +64,8 @@ func DetectProjectContext(dir string) ProjectContext {
 		ctx = ProjectContext{Language: "Java", BuildTool: "maven"}
 	} else if _, err := os.Stat(filepath.Join(dir, "build.gradle")); err == nil {
 		ctx = ProjectContext{Language: "Java/Kotlin", BuildTool: "gradle"}
-	} else {
-		// Try to find .go or .py or .js files loosely
-		// Just default to unknown for now to keep it cheap
 	}
 
-	contextCache.Store(dir, ctx)
+	contextCache.Store(dir, contextEntry{ctx: ctx, expiresAt: time.Now().Add(contextCacheTTL)})
 	return ctx
 }

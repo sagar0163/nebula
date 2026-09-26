@@ -21,7 +21,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 	
 	contextData := "Started goal execution."
 	
-	for i := 0; i < 5; i++ { // limit iterations
+	for i := 0; i < 15; i++ { // limit iterations to 15
 		dir, _ := os.Getwd()
 		codebase := IndexCodebase(dir)
 		userProf := profile.GetUserProfile()
@@ -43,6 +43,11 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 			var toolErr error
 
 			t := tr.Get(step.Tool)
+			if step.Tool == "DoneTool" {
+				fmt.Println("Goal achieved:", step.Input["reason"])
+				return nil
+			}
+			
 			if t == nil {
 				toolErr = fmt.Errorf("unknown tool: %s", step.Tool)
 			} else {

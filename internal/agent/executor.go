@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"context"
 	"errors"
 	"fmt"
@@ -73,8 +74,23 @@ func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestio
 		return nil, errors.New("fix command contains shell metacharacters — manual review required")
 	}
 
-	if !approvalFn(suggestion.FixCmd, safety.Classify(suggestion.FixCmd)) {
-		return nil, nil
+	risk := safety.Classify(suggestion.FixCmd)
+	promptCmd := suggestion.FixCmd
+	if suggestion.Confidence > 0 {
+		promptCmd = fmt.Sprintf("Fix suggestion (confidence: %.0f%%): %s", suggestion.Confidence*100, suggestion.FixCmd)
+	}
+
+	needsApproval := true
+	if suggestion.Confidence >= 0.85 && risk <= safety.RiskLow {
+		needsApproval = false
+	} else if suggestion.Confidence < 0.6 {
+		needsApproval = true
+	}
+
+	if needsApproval {
+		if !approvalFn(promptCmd, risk) {
+			return nil, nil
+		}
 	}
 
 	fixResult, err := e.harness.Run(ctx, args[0], args[1:])
@@ -83,13 +99,26 @@ func (e *Executor) Execute(ctx context.Context, suggestion *models.HealSuggestio
 	return fixResult, err
 }
 
-func (e *Executor) LearnPattern(ctx context.Context, failCmd, failOutput, fixCmd string) error {
+func (e *Executor) LearnPattern(ctx context.Context, failCmd, failOutput, fixCmd string, history []models.TurnRecord) error {
+	var fixChainStr string
+	if len(history) > 0 {
+		chain := make([]string, 0, len(history)+1)
+		for _, h := range history {
+			chain = append(chain, h.FixCmd)
+		}
+		chain = append(chain, fixCmd)
+		b, _ := json.Marshal(chain)
+		fixChainStr = string(b)
+	}
+
 	return e.store.SavePattern(ctx, &models.Pattern{
 		FailCmd:     failCmd,
 		FailOutput:  failOutput,
 		FixCmd:      fixCmd,
 		SuccessRate: 1.0,
 		UseCount:    1,
+		Efficiency:  1.0 / float64(len(history)+1),
 		Embedding:   nil,
+		FixChain:    fixChainStr,
 	})
 }

@@ -542,7 +542,7 @@ nebula setup                    first-run config wizard
 
 ## Deep Reasoning Upgrade — Layer 5: Intelligence Ceiling
 
-### TASK-056: Adaptive turn budget — extend to 6 turns on measurable progress
+### TASK-056: Adaptive turn budget — extend to 6 turns on measurable progress (DONE)
 **Severity:** high
 **Category:** reasoning depth
 **Description:** The healing loop is capped at `maxTurns = 3` in `agent.go`. But 3 is arbitrary — some failures (dependency chains, cascading config errors) genuinely need 4–6 turns. At the same time, many failures resolve in 1 turn and we're wasting budget on the cap. The fix: start at 3, allow up to 6 if each turn makes *measurable progress*, stop early if output is identical to the prior turn.
@@ -598,7 +598,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-059: Store and replay multi-turn fix chains
+### TASK-059: Store and replay multi-turn fix chains (DONE)
 **Severity:** medium
 **Category:** fix accuracy
 **Description:** When a 2–3 turn sequence heals a failure, only the final fix gets stored. The intermediate steps — the partial fix that unblocked the real fix — are thrown away. A future identical failure starts from scratch and burns 2 turns re-discovering the same intermediate step.
@@ -614,7 +614,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-060: Confidence-gated execution — approval threshold scales with confidence
+### TASK-060: Confidence-gated execution — approval threshold scales with confidence (DONE)
 **Severity:** medium
 **Category:** safety + accuracy
 **Description:** All fix suggestions are treated equally — a fresh LLM diagnosis and a weak keyword-recall pattern both get the same approval flow. High-confidence fixes (exact pattern match, LLM with chain-of-thought reasoning) should be auto-approvable at low risk levels. Low-confidence fixes should always prompt regardless of safety classification.
@@ -630,7 +630,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-061: Fix quality scoring — prefer first-attempt patterns on recall
+### TASK-061: Fix quality scoring — prefer first-attempt patterns on recall (DONE)
 **Severity:** low
 **Category:** fix accuracy
 **Description:** Patterns are recalled by match score alone — a fix that took 3 turns to discover gets the same weight as one that worked first try. Over time the pattern DB fills with mediocre multi-turn fixes that crowd out clean single-turn ones. Quality scoring surfaces the cleanest fixes first.

@@ -633,3 +633,44 @@ func TestPatternEmptyFixCmdRoundTrip(t *testing.T) {
 		t.Fatalf("recalled pattern = %+v, want empty FixCmd with UseCount 3", got)
 	}
 }
+
+func TestEfficiencyScoreOrdering(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open memory db: %v", err)
+	}
+	ctx := context.Background()
+	
+	// Insert low efficiency pattern
+	err = db.SavePattern(ctx, &models.Pattern{
+		FailCmd: "git status",
+		FailOutput: "fatal",
+		FixCmd: "git status (low)",
+		UseCount: 10,
+		Efficiency: 0.2, // took 5 turns
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	
+	// Insert high efficiency pattern
+	err = db.SavePattern(ctx, &models.Pattern{
+		FailCmd: "git status",
+		FailOutput: "fatal",
+		FixCmd: "git status (high)",
+		UseCount: 1, // less use count
+		Efficiency: 1.0, // took 1 turn
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Should prefer high efficiency despite lower use count
+	p, err := db.FindPattern(ctx, "git status", "fatal")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if p == nil || p.FixCmd != "git status (high)" {
+		t.Errorf("expected high efficiency pattern, got %+v", p)
+	}
+}

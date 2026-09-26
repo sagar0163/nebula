@@ -232,12 +232,12 @@ func (s *SQLiteStore) SavePattern(ctx context.Context, p *models.Pattern) error 
 		p.UpdatedAt = now
 	}
 
-	const q = `INSERT INTO patterns (fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	const q = `INSERT INTO patterns (fail_cmd, fail_output, fix_cmd, success_rate, use_count, efficiency_score, embedding, fix_chain, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	res, err := s.db.ExecContext(ctx, q,
-		p.FailCmd, p.FailOutput, p.FixCmd, p.SuccessRate, p.UseCount,
-		p.Embedding, p.CreatedAt, p.UpdatedAt,
+		p.FailCmd, p.FailOutput, p.FixCmd, p.SuccessRate, p.UseCount, p.Efficiency,
+		p.Embedding, p.FixChain, p.CreatedAt, p.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("save pattern: %w", err)
@@ -252,8 +252,8 @@ func (s *SQLiteStore) SavePattern(ctx context.Context, p *models.Pattern) error 
 func (s *SQLiteStore) FindPattern(ctx context.Context, failCmd, failOutput string) (*models.Pattern, error) {
 	var p models.Pattern
 	err := s.db.GetContext(ctx, &p,
-		`SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at
-			FROM patterns WHERE fail_cmd = ? AND fail_output = ? ORDER BY use_count DESC LIMIT 1`, failCmd, failOutput)
+		`SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, efficiency_score, embedding, fix_chain, created_at, updated_at
+			FROM patterns WHERE fail_cmd = ? AND fail_output = ? ORDER BY efficiency_score DESC, use_count DESC LIMIT 1`, failCmd, failOutput)
 	switch {
 	case err == nil:
 		return &p, nil
@@ -409,7 +409,7 @@ func (s *SQLiteStore) FindPatternsByKeywords(ctx context.Context, keywords []str
 		args = append(args, "%"+kw+"%", "%"+kw+"%")
 	}
 
-	q := "SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, embedding, created_at, updated_at FROM patterns WHERE " + strings.Join(conditions, " OR ") + " ORDER BY use_count DESC"
+	q := "SELECT id, fail_cmd, fail_output, fix_cmd, success_rate, use_count, efficiency_score, embedding, fix_chain, created_at, updated_at FROM patterns WHERE " + strings.Join(conditions, " OR ") + " ORDER BY efficiency_score DESC, use_count DESC"
 	if limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, limit)

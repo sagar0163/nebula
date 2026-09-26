@@ -1004,3 +1004,65 @@ func TestSessionCommandHistory(t *testing.T) {
 		t.Errorf("prompt missing current failing command info, got:\n%s", prompt)
 	}
 }
+
+func TestAdaptiveTurnBudget(t *testing.T) {
+	// identical output breaks early
+	if progressCheck(1, "same output", 1, "same output") {
+		t.Errorf("progressCheck should be false for identical output")
+	}
+	
+	// different exit code
+	if !progressCheck(1, "same output", 2, "same output") {
+		t.Errorf("progressCheck should be true when exit code changes")
+	}
+	
+	// different output > 10%
+	if !progressCheck(1, "short", 1, "short but now much longer and different") {
+		t.Errorf("progressCheck should be true when output is much longer")
+	}
+	
+	// new keyword
+	if !progressCheck(1, "just some text", 1, "just some text with an error") {
+		t.Errorf("progressCheck should be true when new error keyword appears")
+	}
+}
+
+func TestConfidenceGatedExecution(t *testing.T) {
+	harness := pty.NewHarness(80, 24)
+	store := newTestStore(t)
+	router := llm.NewRouter()
+	executor := NewExecutor(harness, router, store)
+
+	var calls int
+	approver := func(cmd string, risk safety.Risk) bool {
+		calls++
+		if !strings.Contains(cmd, "confidence:") {
+			t.Errorf("prompt missing confidence string, got: %s", cmd)
+		}
+		return true
+	}
+
+	// High confidence, low risk -> auto-approves
+	calls = 0
+	s1 := &models.HealSuggestion{FixCmd: "ls", Confidence: 0.90}
+	_, _ = executor.Execute(context.Background(), s1, "boom", approver)
+	if calls != 0 {
+		t.Errorf("high confidence safe cmd called approver %d times, want 0", calls)
+	}
+
+	// High confidence, high risk -> prompts
+	calls = 0
+	s2 := &models.HealSuggestion{FixCmd: "rm -rf /", Confidence: 0.90}
+	_, _ = executor.Execute(context.Background(), s2, "boom", approver)
+	if calls != 1 {
+		t.Errorf("high confidence dangerous cmd called approver %d times, want 1", calls)
+	}
+
+	// Low confidence, low risk -> prompts
+	calls = 0
+	s3 := &models.HealSuggestion{FixCmd: "ls", Confidence: 0.50}
+	_, _ = executor.Execute(context.Background(), s3, "boom", approver)
+	if calls != 1 {
+		t.Errorf("low confidence safe cmd called approver %d times, want 1", calls)
+	}
+}

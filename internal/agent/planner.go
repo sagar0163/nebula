@@ -32,7 +32,7 @@ func (p *Planner) Plan(ctx context.Context, failCmd, output, transcript string, 
 		ctx = context.Background()
 	}
 	// Try recalling a similar past fix before calling the LLM.
-	if recalled, err := p.recallPattern(ctx, failCmd, output); err == nil && recalled != nil {
+	if recalled, err := p.recallPattern(ctx, failCmd, output, len(history)); err == nil && recalled != nil {
 		return recalled, nil
 	}
 
@@ -101,15 +101,31 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, 
 	return parseSuggestion(cmd, response), nil
 }
 
-func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string) (*models.HealSuggestion, error) {
+func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string, attemptCount int) (*models.HealSuggestion, error) {
+	buildSuggestion := func(pattern *models.Pattern, source string) *models.HealSuggestion {
+		fix := pattern.FixCmd
+		if pattern.FixChain != "" {
+			var chain []string
+			if err := json.Unmarshal([]byte(pattern.FixChain), &chain); err == nil && len(chain) > 0 {
+				if attemptCount < len(chain) {
+					fix = chain[attemptCount]
+					source += " (partial step)"
+				}
+			}
+		}
+		return &models.HealSuggestion{
+			OriginalCmd: failCmd,
+			FixCmd:      fix,
+			Explanation: source,
+		}
+	}
+
 	// 1. Exact match first
 	pattern, err := p.store.FindPattern(ctx, failCmd, failOutput)
 	if err == nil && pattern != nil {
-		return &models.HealSuggestion{
-			OriginalCmd: failCmd,
-			FixCmd:      pattern.FixCmd,
-			Explanation: "recalled from exact past fix",
-		}, nil
+		s := buildSuggestion(pattern, "recalled from exact past fix")
+		s.Confidence = 0.95
+		return s, nil
 	}
 
 	// 2. Keyword overlap fallback
@@ -154,11 +170,9 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 				}
 			}
 			if bestScore >= 2 && best != nil {
-				return &models.HealSuggestion{
-					OriginalCmd: failCmd,
-					FixCmd:      best.FixCmd,
-					Explanation: "recalled from similar past fix (keyword match)",
-				}, nil
+				s := buildSuggestion(best, "recalled from similar past fix (keyword match)")
+				s.Confidence = 0.5
+				return s, nil
 			}
 		}
 	}
@@ -255,12 +269,20 @@ func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
 		Confidence  float64 `json:"confidence"`
 	}
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil && parsed.Fix != "" {
+		conf := parsed.Confidence
+		if conf == 0 {
+			if parsed.Reasoning != "" {
+				conf = 0.85
+			} else {
+				conf = 0.7
+			}
+		}
 		return &models.HealSuggestion{
 			OriginalCmd: originalCmd,
 			FixCmd:      parsed.Fix,
 			Explanation: parsed.Explanation,
 			Reasoning:   parsed.Reasoning,
-			Confidence:  parsed.Confidence,
+			Confidence:  conf,
 		}
 	}
 
@@ -281,5 +303,6 @@ func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
 		OriginalCmd: originalCmd,
 		FixCmd:      fix,
 		Explanation: explanation,
+		Confidence:  0.7,
 	}
 }

@@ -32,7 +32,9 @@ type Pattern struct {
 	FixCmd      string    `db:"fix_cmd"`
 	SuccessRate float64   `db:"success_rate"`
 	UseCount    int       `db:"use_count"`
+	Efficiency  float64   `db:"efficiency_score"`
 	Embedding   []byte    `db:"embedding"` // float32 slice, gob-encoded
+	FixChain    string    `db:"fix_chain"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
 }

@@ -3,13 +3,19 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-
+	"github.com/sagar0163/nebula/internal/tools"
+	
 )
 
 func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error {
-	planner := NewGoalPlanner(a.router)
+		tr := tools.NewRegistry()
+	tr.Register(&tools.ShellTool{})
+	tr.Register(&tools.ReadFileTool{})
+	tr.Register(&tools.WriteFileTool{})
+	tr.Register(&tools.GrepTool{})
+	tr.Register(&tools.GitTool{})
+
+	planner := NewGoalPlanner(a.router, tr)
 	
 	contextData := "Started goal execution."
 	
@@ -30,31 +36,17 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 			var out string
 			var toolErr error
 
-			switch step.Tool {
-			case "ShellTool":
-				cmdStr := step.Input["command"]
-				if opts.ApprovalFn != nil && !opts.SkipPermissions {
-					// We use a basic risk for now
-					if !opts.ApprovalFn(cmdStr, 0) {
-						return fmt.Errorf("user rejected command: %s", cmdStr)
+			t := tr.Get(step.Tool)
+			if t == nil {
+				toolErr = fmt.Errorf("unknown tool: %s", step.Tool)
+			} else {
+				// Intercept ShellTool for approval
+				if step.Tool == "ShellTool" && opts.ApprovalFn != nil && !opts.SkipPermissions {
+					if !opts.ApprovalFn(step.Input["command"], 0) {
+						return fmt.Errorf("user rejected command: %s", step.Input["command"])
 					}
 				}
-				cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
-				outBytes, err := cmd.CombinedOutput()
-				out = string(outBytes)
-				toolErr = err
-			case "ReadFileTool":
-				path := step.Input["path"]
-				content, err := os.ReadFile(path)
-				out = string(content)
-				toolErr = err
-			case "WriteFileTool":
-				path := step.Input["path"]
-				content := step.Input["content"]
-				toolErr = os.WriteFile(path, []byte(content), 0644)
-				out = "File written successfully."
-			default:
-				toolErr = fmt.Errorf("unknown tool: %s", step.Tool)
+				out, toolErr = t.Execute(ctx, step.Input)
 			}
 
 			if toolErr != nil {

@@ -869,7 +869,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-063: General tool registry
+### TASK-063: General tool registry (DONE)
 **Severity:** critical
 **Category:** architecture
 **Description:** Right now Nebula's only "tool" is running a shell command and watching it. A general agent needs a tool registry: ShellTool, ReadFileTool, WriteFileTool, GrepTool, GitTool, WebFetchTool. Each tool has a name, description (for the LLM to choose it), input schema, and execute method. The LLM uses tool-calling to pick and invoke tools rather than generating raw shell commands.

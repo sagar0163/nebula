@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"strings"
 	"github.com/spf13/viper"
 
 	"github.com/sagar0163/nebula/internal/agent"
@@ -278,6 +279,12 @@ func (ad agentAdapter) Run(ctx context.Context, args []string, opts tui.AgentRun
 		Healed:    r.Healed,
 		HealApply: r.HealApply,
 	}, nil
+}
+
+func (ad agentAdapter) DoGoalStr(ctx context.Context, goal string, opts interface{}) (string, error) {
+	var sb strings.Builder
+	err := ad.a.DoGoal(ctx, goal, opts.(agent.RunOptions), &sb)
+	return sb.String(), err
 }
 
 func runInteractive() error {

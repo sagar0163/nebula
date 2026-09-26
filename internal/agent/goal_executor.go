@@ -3,13 +3,14 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"github.com/sagar0163/nebula/internal/tools"
 	"github.com/sagar0163/nebula/internal/profile"
 	
 )
 
-func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error {
+func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io.Writer) error {
 		tr := tools.NewRegistry()
 	tr.Register(&tools.ShellTool{})
 	tr.Register(&tools.ReadFileTool{})
@@ -32,19 +33,19 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 		}
 
 		if len(steps) == 0 {
-			fmt.Println("Goal achieved or no further steps planned.")
+			fmt.Fprintln(out, "Goal achieved or no further steps planned.")
 			return nil
 		}
 
 		for _, step := range steps {
-			fmt.Printf("Executing %s...\n", step.Tool)
+			fmt.Fprintf(out, "Executing %s...\n", step.Tool)
 			
-			var out string
+			var outStr string
 			var toolErr error
 
 			t := tr.Get(step.Tool)
 			if step.Tool == "DoneTool" {
-				fmt.Println("Goal achieved:", step.Input["reason"])
+				fmt.Fprintln(out, "Goal achieved:", step.Input["reason"])
 				return nil
 			}
 			
@@ -57,15 +58,17 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions) error 
 						return fmt.Errorf("user rejected command: %s", step.Input["command"])
 					}
 				}
-				out, toolErr = t.Execute(ctx, step.Input)
+				toolOut, tErr := t.Execute(ctx, step.Input)
+					toolErr = tErr
+				outStr = toolOut
 			}
 
 			if toolErr != nil {
-				out += fmt.Sprintf("\nError: %v", toolErr)
+				outStr += fmt.Sprintf("\nError: %v", toolErr)
 			}
 
 			// Add to context
-			contextData += fmt.Sprintf("\nStep: %s\nResult:\n%s\n", step.Tool, out)
+			contextData += fmt.Sprintf("\nStep: %s\nResult:\n%s\n", step.Tool, outStr)
 		}
 		
 		// Wait, a ReAct style loop uses the context to plan the next steps.

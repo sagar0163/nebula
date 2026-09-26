@@ -14,6 +14,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sagar0163/nebula/internal/tui"
 	"github.com/spf13/viper"
 	"github.com/zalando/go-keyring"
 
@@ -581,7 +583,7 @@ func newDoCmd() *cobra.Command {
 				},
 			}
 			
-			return a.DoGoal(cmd.Context(), strings.Join(args, " "), opts)
+			return a.DoGoal(cmd.Context(), strings.Join(args, " "), opts, os.Stdout)
 		},
 	}
 }
@@ -603,8 +605,21 @@ func newChatCmd() *cobra.Command {
 		Use:   "chat",
 		Short: "Start a multi-turn conversation with Nebula",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("Starting nebula chat...")
-			return nil
+			a, err := buildAgent()
+			if err != nil {
+				return err
+			}
+			
+			skipPerms, _ := rootCmd.PersistentFlags().GetBool("dangerously-skip-permissions")
+			opts := agent.RunOptions{
+				DryRun:          dryRun,
+				SkipPermissions: skipPerms,
+			}
+			
+			m := tui.NewChat(agentAdapter{a}, opts)
+			p := tea.NewProgram(m, tea.WithAltScreen())
+			_, err = p.Run()
+			return err
 		},
 	}
 }
@@ -662,7 +677,7 @@ func newDaemonCmd() *cobra.Command {
 				goal := cfg.Goal
 				t.Start(cmd.Context(), func() {
 					fmt.Printf("\n[Daemon] Trigger fired! Executing goal: %s\n", goal)
-					err := a.DoGoal(context.Background(), goal, opts)
+					err := a.DoGoal(context.Background(), goal, opts, os.Stdout)
 					if err != nil {
 						fmt.Printf("[Daemon] Error executing goal: %v\n", err)
 					}

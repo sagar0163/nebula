@@ -992,3 +992,15 @@ func TestPipelineNoGoroutineLeaks(t *testing.T) {
 		t.Fatalf("goroutine leak: baseline %d, minimum after drain %d", base, minObserved)
 	}
 }
+
+func TestSessionCommandHistory(t *testing.T) {
+	sessionHistory := []string{"git add . (exit 0)"}
+	prompt := buildDiagnosePrompt("git commit", "error", "", 1, nil, sessionHistory)
+
+	if !strings.Contains(prompt, "git add . (exit 0)") {
+		t.Errorf("prompt missing first command history, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "git commit (exit 1) ← failing command") {
+		t.Errorf("prompt missing current failing command info, got:\n%s", prompt)
+	}
+}

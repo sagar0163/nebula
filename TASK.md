@@ -632,7 +632,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-053: Structured LLM response format — replace regex parsing with JSON
+### TASK-053: Structured LLM response format — replace regex parsing with JSON (DONE)
 **Severity:** medium
 **Category:** reliability
 **Description:** `parseSuggestion` in `planner.go` uses regex to extract `FIX:` and `EXPLANATION:` lines from free-form LLM text. This breaks silently whenever the model uses slightly different formatting (e.g. `Fix:`, `**FIX:**`, multi-line fixes). JSON response format is supported by all major providers and eliminates parsing fragility entirely.
@@ -648,7 +648,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-054: Session-scoped command history for LLM context
+### TASK-054: Session-scoped command history for LLM context (DONE)
 **Severity:** medium
 **Category:** fix accuracy
 **Description:** Each `nebula run` invocation is completely stateless — the LLM has no idea what commands the user ran before the failing one. Often the fix requires knowing context: "the user ran `git add .` then `git commit` then `git push` failed" is far more diagnostic than just seeing the `git push` error. Recent session commands (last 5–10) should be injected as context.
@@ -663,7 +663,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-055: Parallel provider fan-out with first-wins routing
+### TASK-055: Parallel provider fan-out with first-wins routing (DONE)
 **Severity:** low
 **Category:** latency
 **Description:** The LLM router tries providers sequentially — if Groq is slow (15s), it waits the full 60s timeout before trying Gemini. In practice, latency variance between providers on the same prompt is huge. Fan-out to 2–3 providers simultaneously and use whichever responds first cuts P99 latency by 50–70%.

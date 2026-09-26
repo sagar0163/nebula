@@ -898,7 +898,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-065: Proactive triggers — cron and file-watch modes
+### TASK-065: Proactive triggers — cron and file-watch modes (DONE)
 **Severity:** high
 **Category:** architecture
 **Description:** A butler doesn't wait to be called. Add two proactive trigger modes: (1) cron-style scheduled tasks (`nebula schedule "every morning summarize last night's commits"`), (2) file-watch triggers (`nebula watch src/ "if any .go file changes, run go test ./..."`).
@@ -913,7 +913,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-066: Persistent user and project profiles
+### TASK-066: Persistent user and project profiles (DONE)
 **Severity:** medium
 **Category:** intelligence
 **Description:** JARVIS knows Tony Stark's preferences, current projects, working style. Nebula should build up a profile of: the user's tech stack, coding conventions, preferred tools, current project goals, past interactions. This profile injects into every goal-planning prompt so suggestions are personalised.
@@ -928,7 +928,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-067: Web capability — fetch, search, read
+### TASK-067: Web capability — fetch, search, read (DONE)
 **Severity:** medium
 **Category:** tools
 **Description:** A general agent needs the web. "Check if there's a newer version of this dependency", "find docs for this API", "search for how to fix this error" all require web access. Add WebFetchTool and WebSearchTool to the tool registry.
@@ -942,7 +942,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-068: `nebula fix <description>` — natural language code fix
+### TASK-068: `nebula fix <description>` — natural language code fix (DONE)
 **Severity:** high
 **Category:** UX
 **Description:** The most common butler task. `nebula fix "Blueprint should raise ValueError for empty name"` should: find the relevant file, understand the existing pattern (there's already a dotted-name check), add the analogous empty-name check, run the test suite, verify green. This is the task SWE-bench measures — and the gap between Nebula today and a real coding assistant.
@@ -956,7 +956,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-069: Multi-turn conversation mode — `nebula chat`
+### TASK-069: Multi-turn conversation mode — `nebula chat` (DONE)
 **Severity:** medium
 **Category:** UX
 **Description:** Sometimes a goal isn't fully specified upfront. `nebula chat` opens a persistent conversation where Nebula asks clarifying questions, takes intermediate feedback, and executes incrementally. Terminal-native assistant with tool access and project awareness.

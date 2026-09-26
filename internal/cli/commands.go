@@ -584,3 +584,26 @@ func newDoCmd() *cobra.Command {
 		},
 	}
 }
+
+func newFixCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "fix [description...]",
+		Short: "Fix the codebase based on a natural language description",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println("Running nebula fix...")
+			return nil
+		},
+	}
+}
+
+func newChatCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "chat",
+		Short: "Start a multi-turn conversation with Nebula",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println("Starting nebula chat...")
+			return nil
+		},
+	}
+}

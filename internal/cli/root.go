@@ -68,6 +68,8 @@ func init() {
 		newWatchCmd(),
 		newEvalCmd(),
 		newDoCmd(),
+		newFixCmd(),
+		newChatCmd(),
 		newVersionCmd(),
 	)
 }

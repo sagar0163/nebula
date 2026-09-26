@@ -619,6 +619,11 @@ func newDaemonCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Start the daemon to run proactive triggers",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := buildAgent()
+			if err != nil {
+				return err
+			}
+
 			fmt.Println("Starting Nebula daemon...")
 			home, _ := os.UserHomeDir()
 			triggerDir := filepath.Join(home, ".config", "nebula", "triggers")
@@ -634,8 +639,47 @@ func newDaemonCmd() *cobra.Command {
 			}
 			
 			fmt.Printf("Loaded %d triggers. Daemon running...\n", len(cfgs))
-			// Simulate a running daemon for now
-			select {}
+			
+			skipPerms, _ := rootCmd.PersistentFlags().GetBool("dangerously-skip-permissions")
+			opts := agent.RunOptions{
+				DryRun:          dryRun,
+				SkipPermissions: skipPerms,
+			}
+
+			var activeTriggers []triggers.Trigger
+			for _, cfg := range cfgs {
+				var t triggers.Trigger
+				if cfg.Type == "cron" {
+					t = triggers.NewCronTrigger(cfg.Schedule)
+				} else if cfg.Type == "file-watch" {
+					t = triggers.NewFileWatchTrigger(cfg.Path)
+				} else {
+					fmt.Println("Unknown trigger type:", cfg.Type)
+					continue
+				}
+
+				// capture closure variable
+				goal := cfg.Goal
+				t.Start(cmd.Context(), func() {
+					fmt.Printf("\n[Daemon] Trigger fired! Executing goal: %s\n", goal)
+					err := a.DoGoal(context.Background(), goal, opts)
+					if err != nil {
+						fmt.Printf("[Daemon] Error executing goal: %v\n", err)
+					}
+				})
+				activeTriggers = append(activeTriggers, t)
+			}
+
+			// Wait for interrupt
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			<-ctx.Done()
+
+			fmt.Println("\nShutting down daemon...")
+			for _, t := range activeTriggers {
+				t.Stop()
+			}
+			return nil
 		},
 	}
 

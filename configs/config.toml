@@ -11,8 +11,8 @@ agent_history_depth = 10
 agent_file_injection = true
 
 [llm]
-# Primary provider: "gemini" | "groq" | "ollama" | "openai"
-primary = "groq"
+# Primary provider: "gemini" | "groq" | "ollama" | "openai" | "nvidia"
+primary = "nvidia"
 # Fallback provider when primary is unavailable
 fallback = "ollama"
 # Race this many providers concurrently and keep the first response

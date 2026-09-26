@@ -47,9 +47,17 @@ func (p *Planner) budgetOutput(ctx context.Context, output string) string {
 			cw = 4096
 		}
 	}
-	// Budget max 20% of context window for command output (approx 4 chars per token)
-	tokenBudget := cw * 20 / 100
-	maxBytes := tokenBudget * 4
+	// Instead of a flat 20%, we subtract a fixed "headroom" for the system prompt, 
+	// conversation history, and the agent's scratchpad.
+	// For massive context models (Gemini/Claude), this gives them huge budgets.
+	// For smaller models (Groq), this prevents artificial starvation.
+	headroomTokens := 3000
+	tokenBudget := cw - headroomTokens
+	if tokenBudget < 1024 {
+		tokenBudget = 1024 // Absolute minimum budget for logs
+	}
+	
+	maxBytes := tokenBudget * 4 // approx 4 chars per token
 	if maxBytes < 1024 {
 		maxBytes = 1024
 	}
@@ -84,21 +92,40 @@ func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, 
 		ResponseFormat: "json",
 	}
 
-	tokens, err := p.router.Complete(ctx, llm.WorkloadDiagnose, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var builder strings.Builder
-	for t := range tokens {
-		if t.Err != nil {
-			return nil, t.Err
+	const maxRetries = 3
+	var lastErr error
+	
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		tokens, err := p.router.Complete(ctx, llm.WorkloadDiagnose, req)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		builder.WriteString(t.Text)
-	}
-	response := builder.String()
 
-	return parseSuggestion(cmd, response), nil
+		var builder strings.Builder
+		for t := range tokens {
+			if t.Err != nil {
+				lastErr = t.Err
+				break
+			}
+			builder.WriteString(t.Text)
+		}
+		
+		if lastErr != nil {
+			continue
+		}
+
+		response := builder.String()
+		suggestion := parseSuggestion(cmd, response)
+		if suggestion != nil {
+			return suggestion, nil
+		}
+		
+		// parseSuggestion returned nil - likely truncated/invalid JSON, retry
+		lastErr = fmt.Errorf("failed to parse suggestion (attempt %d/%d)", attempt+1, maxRetries+1)
+	}
+
+	return nil, fmt.Errorf("diagnose failed after %d retries: %w", maxRetries+1, lastErr)
 }
 
 func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string, attemptCount int) (*models.HealSuggestion, error) {

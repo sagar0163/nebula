@@ -26,6 +26,7 @@ import (
 	"github.com/sagar0163/nebula/internal/triggers"
 	"github.com/sagar0163/nebula/internal/agent"
 	"github.com/sagar0163/nebula/internal/safety"
+	"github.com/sagar0163/nebula/internal/swebench"
 )
 
 var knownProviders = []string{"groq", "gemini", "mistral", "nvidia"}
@@ -718,4 +719,8 @@ func newDaemonCmd() *cobra.Command {
 
 	cmd.AddCommand(startCmd, statusCmd, stopCmd)
 	return cmd
+}
+
+func newSWEBenchCmd() *cobra.Command {
+	return swebench.NewSWEBenchCmd()
 }

@@ -73,6 +73,7 @@ func init() {
 		newFixCmd(),
 		newChatCmd(),
 		newVersionCmd(),
+		newSWEBenchCmd(),
 	)
 }
 
@@ -354,4 +355,17 @@ func runAsk(input string) error {
 		return fmt.Errorf("ask: %w", err)
 	}
 	return nil
+}
+
+// BuildRouterForProvider builds a router pinned to a single provider.
+// Returns nil if the provider has no key configured.
+func BuildRouterForProvider(provider, model string) *llm.Router {
+	only := provider
+	if only == "" {
+		only = firstAvailableProvider()
+	}
+	if only == "" {
+		return nil
+	}
+	return buildRouter(only, nil)
 }

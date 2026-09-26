@@ -56,34 +56,49 @@ Break down the goal into a sequence of steps. Respond ONLY with a JSON object in
 		ResponseFormat: "json",
 	}
 
-	tokens, err := p.router.Complete(ctx, llm.WorkloadDiagnose, req)
-	if err != nil {
-		return nil, err
-	}
+	const maxRetries = 3
+	var lastErr error
 	
-	var builder strings.Builder
-	for token := range tokens {
-		if token.Err != nil {
-			return nil, token.Err
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		tokens, err := p.router.Complete(ctx, llm.WorkloadDiagnose, req)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		builder.WriteString(token.Text)
-	}
-	res := builder.String()
 
-	trimmed := strings.TrimSpace(res)
-	if strings.HasPrefix(trimmed, "```") {
-		if i := strings.Index(trimmed[3:], "```"); i >= 0 {
-			trimmed = strings.TrimSpace(trimmed[3 : 3+i])
-			if after, ok := strings.CutPrefix(trimmed, "json"); ok {
-				trimmed = strings.TrimSpace(after)
+		var builder strings.Builder
+		for token := range tokens {
+			if token.Err != nil {
+				lastErr = token.Err
+				break
+			}
+			builder.WriteString(token.Text)
+		}
+		
+		if lastErr != nil {
+			continue
+		}
+
+		res := builder.String()
+		trimmed := strings.TrimSpace(res)
+		if strings.HasPrefix(trimmed, "```") {
+			if i := strings.Index(trimmed[3:], "```"); i >= 0 {
+				trimmed = strings.TrimSpace(trimmed[3 : 3+i])
+				if after, ok := strings.CutPrefix(trimmed, "json"); ok {
+					trimmed = strings.TrimSpace(after)
+				}
 			}
 		}
+
+		var plan models.GoalPlan
+		if err := json.Unmarshal([]byte(trimmed), &plan); err != nil {
+			// JSON parse failed - likely truncated response, retry if we have attempts left
+			lastErr = fmt.Errorf("failed to parse goal plan (attempt %d/%d): %w", attempt+1, maxRetries+1, err)
+			continue
+		}
+
+		return plan.Steps, nil
 	}
 
-	var plan models.GoalPlan
-	if err := json.Unmarshal([]byte(trimmed), &plan); err != nil {
-		return nil, fmt.Errorf("failed to parse goal plan: %w", err)
-	}
-
-	return plan.Steps, nil
+	return nil, fmt.Errorf("goal planner failed after %d retries: %w", maxRetries+1, lastErr)
 }

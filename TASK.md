@@ -854,7 +854,7 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 
 ---
 
-### TASK-062: Natural language goal intake — `nebula do <goal>`
+### TASK-062: Natural language goal intake — `nebula do <goal>` (DONE)
 **Severity:** critical
 **Category:** architecture
 **Description:** Add `nebula do <natural language goal>` command. Unlike `nebula run <cmd>` (which runs a specific command and heals failures), `nebula do` takes any natural-language goal and figures out what to do: "fix the Blueprint empty-name bug", "add a test for the login endpoint", "summarise today's git commits", "find all TODO comments in the codebase". The agent plans steps, picks tools, executes, verifies.

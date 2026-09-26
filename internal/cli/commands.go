@@ -21,6 +21,8 @@ import (
 	"github.com/sagar0163/nebula/internal/skills"
 	"github.com/sagar0163/nebula/internal/workflow"
 	"github.com/sagar0163/nebula/internal/daemon"
+	"github.com/sagar0163/nebula/internal/agent"
+	"github.com/sagar0163/nebula/internal/safety"
 )
 
 var knownProviders = []string{"groq", "gemini", "mistral", "nvidia"}
@@ -551,6 +553,34 @@ func newWatchCmd() *cobra.Command {
 			defer cancel()
 
 			return daemon.Watch(ctx, a, store, queueDir)
+		},
+	}
+}
+
+func newDoCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "do [goal...]",
+		Short: "Achieve a natural language goal",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := buildAgent()
+			if err != nil {
+				return err
+			}
+			
+			skipPerms, _ := rootCmd.PersistentFlags().GetBool("dangerously-skip-permissions")
+			opts := agent.RunOptions{
+				DryRun:          dryRun,
+				SkipPermissions: skipPerms,
+				ApprovalFn: func(c string, _ safety.Risk) bool {
+					fmt.Fprintf(os.Stderr, "nebula: approve running %q? [y/N] ", c)
+					var resp string
+					fmt.Scanln(&resp)
+					return resp == "y" || resp == "Y"
+				},
+			}
+			
+			return a.DoGoal(cmd.Context(), strings.Join(args, " "), opts)
 		},
 	}
 }

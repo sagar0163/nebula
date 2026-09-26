@@ -67,6 +67,7 @@ func init() {
 		newWorkflowCmd(),
 		newWatchCmd(),
 		newEvalCmd(),
+		newDoCmd(),
 		newVersionCmd(),
 	)
 }

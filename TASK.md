@@ -540,6 +540,113 @@ nebula setup                    first-run config wizard
 
 ---
 
+## Deep Reasoning Upgrade — Layer 5: Intelligence Ceiling
+
+### TASK-056: Adaptive turn budget — extend to 6 turns on measurable progress
+**Severity:** high
+**Category:** reasoning depth
+**Description:** The healing loop is capped at `maxTurns = 3` in `agent.go`. But 3 is arbitrary — some failures (dependency chains, cascading config errors) genuinely need 4–6 turns. At the same time, many failures resolve in 1 turn and we're wasting budget on the cap. The fix: start at 3, allow up to 6 if each turn makes *measurable progress*, stop early if output is identical to the prior turn.
+
+**Details:**
+- File: `internal/agent/agent.go`
+- Add `progressCheck(prevOutput, newOutput string) bool` — returns true if: (a) exit code changed, (b) output differs by >10%, (c) a new error keyword appears or a prior one disappears
+- If `progressCheck` returns true after turn 3, allow up to 3 more turns (max 6 total)
+- If `progressCheck` returns false (output identical), break immediately — doom loop, no more turns
+- Config option: `agent_max_turns = 6` (raise ceiling), `agent_min_turns = 1` (allow early exit)
+- Update doom-loop fingerprint to use turn count to avoid interference
+- Add tests: identical output breaks early, different output extends to turn 4+
+- Branch: `feat/adaptive-turn-budget`
+
+---
+
+### TASK-057: Chain-of-thought reasoning mode — LLM scratchpad across turns
+**Severity:** critical
+**Category:** reasoning depth
+**Description:** The single biggest accuracy gap vs Claude Code. Currently each turn just sees "I tried X, it failed with Y." The LLM has no scratchpad — it can't build a hypothesis across turns. Adding a `"reasoning"` field to the JSON response gives the model a working memory: it explains what it thinks is wrong and why, and that reasoning gets injected into the next turn as context. This is what separates reactive patching from actual diagnosis.
+
+**Details:**
+- File: `internal/agent/planner.go`, `internal/models/models.go`
+- Update JSON response schema: `{"fix": "...", "explanation": "...", "reasoning": "...", "confidence": 0.0–1.0}`
+- Update `parseSuggestion` to extract `reasoning` and `confidence` fields
+- Add `Reasoning string` and `Confidence float64` to `HealSuggestion`
+- In `buildDiagnosePrompt`, when `history` is non-empty, include prior turn's `reasoning` field:
+  `"My prior reasoning was: <reasoning>. That fix failed. Revise my hypothesis."`
+- The reasoning field is never shown to the user — it's internal scratchpad only
+- Add `Confidence float64` to `HealSuggestion` (used by TASK-060)
+- Add tests: multi-turn prompt contains prior turn's reasoning; low-confidence suggestion parsed correctly
+- Branch: `feat/chain-of-thought-reasoning`
+
+---
+
+### TASK-058: Smart file injection — read relevant files on failure
+**Severity:** high
+**Category:** reasoning depth
+**Description:** The LLM knows the project type (TASK-049) but has never seen the actual files. A Go build error mentioning `internal/foo/bar.go:42` can be diagnosed perfectly if the LLM sees that file's contents — but it currently can't. Claude Code reads the whole repo; we get 80% of the value by reading 3–5 targeted files extracted from the error output.
+
+**Details:**
+- File: `internal/agent/planner.go`, new `internal/agent/file_injector.go`
+- Add `ExtractRelevantFiles(cmd, output string, maxFiles int) []string`:
+  - Regex-extract file paths from error output: `(\S+\.go:\d+)`, `(\S+\.js:\d+)`, `(\S+\.py:\d+)` etc.
+  - For `go build/test` failures: also read `go.mod`
+  - For `npm run X` failures: also read `package.json` (scripts section only)
+  - For `python` failures: also read `requirements.txt` / `pyproject.toml`
+  - Cap: max 3 files, max 2KB per file (trim to first+last 512B if larger)
+- Inject as a fenced block in `buildDiagnosePrompt`: ` ```go\n// internal/foo/bar.go:42\n...\n``` `
+- Add config option `agent_file_injection = true` (default true)
+- Add tests: Go error extracts the referenced .go file; npm error extracts package.json scripts
+- Branch: `feat/smart-file-injection`
+
+---
+
+### TASK-059: Store and replay multi-turn fix chains
+**Severity:** medium
+**Category:** fix accuracy
+**Description:** When a 2–3 turn sequence heals a failure, only the final fix gets stored. The intermediate steps — the partial fix that unblocked the real fix — are thrown away. A future identical failure starts from scratch and burns 2 turns re-discovering the same intermediate step.
+
+**Details:**
+- File: `internal/memory/store.go`, `internal/models/models.go`, `internal/agent/executor.go`
+- Add `FixChain []string` field to `models.Pattern` — ordered list of fix commands that led to success
+- Add migration: `ALTER TABLE patterns ADD COLUMN fix_chain TEXT DEFAULT ''` (JSON-encoded)
+- In `learnPattern`, if `len(history) > 0`, store the full chain: `[history[0].FixCmd, ..., finalFix]`
+- In `recallPattern`, if a recalled pattern has a non-empty chain and the current attempt count matches, return the next step in the chain instead of the final fix
+- Add tests: 2-turn chain stored on success; recall returns step 1 on first attempt, step 2 on second
+- Branch: `feat/multi-turn-fix-chains`
+
+---
+
+### TASK-060: Confidence-gated execution — approval threshold scales with confidence
+**Severity:** medium
+**Category:** safety + accuracy
+**Description:** All fix suggestions are treated equally — a fresh LLM diagnosis and a weak keyword-recall pattern both get the same approval flow. High-confidence fixes (exact pattern match, LLM with chain-of-thought reasoning) should be auto-approvable at low risk levels. Low-confidence fixes should always prompt regardless of safety classification.
+
+**Details:**
+- File: `internal/agent/executor.go`, `internal/models/models.go`
+- `HealSuggestion.Confidence float64` (added in TASK-057): pattern exact recall = 0.95, keyword recall = 0.5, LLM without reasoning = 0.7, LLM with reasoning = 0.85
+- In `Execute()`: if `confidence < 0.6`, always call `approvalFn` regardless of risk level
+- If `confidence >= 0.85` AND `risk <= RiskLow`, auto-approve without prompting
+- Surface confidence in the approval prompt: `"Fix suggestion (confidence: 85%): git stash && git pull"`
+- Add tests: low-confidence suggestion prompts even at RiskSafe; high-confidence RiskLow auto-approves
+- Branch: `feat/confidence-gated-execution`
+
+---
+
+### TASK-061: Fix quality scoring — prefer first-attempt patterns on recall
+**Severity:** low
+**Category:** fix accuracy
+**Description:** Patterns are recalled by match score alone — a fix that took 3 turns to discover gets the same weight as one that worked first try. Over time the pattern DB fills with mediocre multi-turn fixes that crowd out clean single-turn ones. Quality scoring surfaces the cleanest fixes first.
+
+**Details:**
+- File: `internal/memory/store.go`, `internal/models/models.go`
+- Add `QualityScore float64` to `models.Pattern` and DB column
+- Add migration: `ALTER TABLE patterns ADD COLUMN quality_score REAL DEFAULT 0.75`
+- Score at learn time: first-attempt fix = 1.0, two turns = 0.7, three turns = 0.5
+- In `FindPattern` / `FindPatternsByKeywords`: `ORDER BY quality_score DESC` when scores are available
+- If multiple patterns match with same keyword score, prefer higher `quality_score`
+- Add tests: two patterns for same command — higher quality returned first
+- Branch: `feat/fix-quality-scoring`
+
+---
+
 ---
 
 ## Ultimate Harness Upgrade — Layer 1: Clean the Prompt

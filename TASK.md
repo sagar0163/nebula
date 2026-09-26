@@ -55,7 +55,12 @@ nebula setup                    first-run config wizard
 
 ---
 
-## Open Tasks
+## Tasks (All Completed ✅)
+
+> **Status as of 2026-09-26:** All 55 tasks done. See `BENCHMARK.md` for the achieved harness capabilities.
+> Next work: v0.3.0 release tag once CI confirms green on main.
+
+---
 
 ### TASK-010: Bound PTY output capture — prevent OOM on high-volume commands (DONE)
 **Severity:** critical
@@ -617,7 +622,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-052: Add `nebula workflow cancel <id>` command
+### TASK-052: Add `nebula workflow cancel <id>` command (DONE)
 **Severity:** medium
 **Category:** reliability
 **Description:** TASK-035 added a 2hr hard timeout to background workflows but there is no way to cancel a running job early. Long-running background workflows (e.g. research workflows hitting slow LLMs) block a job slot with no escape hatch.

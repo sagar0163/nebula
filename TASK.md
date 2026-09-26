@@ -559,7 +559,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-057: Chain-of-thought reasoning mode — LLM scratchpad across turns
+### TASK-057: Chain-of-thought reasoning mode — LLM scratchpad across turns ✅ DONE
 **Severity:** critical
 **Category:** reasoning depth
 **Description:** The single biggest accuracy gap vs Claude Code. Currently each turn just sees "I tried X, it failed with Y." The LLM has no scratchpad — it can't build a hypothesis across turns. Adding a `"reasoning"` field to the JSON response gives the model a working memory: it explains what it thinks is wrong and why, and that reasoning gets injected into the next turn as context. This is what separates reactive patching from actual diagnosis.
@@ -578,7 +578,7 @@ nebula setup                    first-run config wizard
 
 ---
 
-### TASK-058: Smart file injection — read relevant files on failure
+### TASK-058: Smart file injection — read relevant files on failure ✅ DONE
 **Severity:** high
 **Category:** reasoning depth
 **Description:** The LLM knows the project type (TASK-049) but has never seen the actual files. A Go build error mentioning `internal/foo/bar.go:42` can be diagnosed perfectly if the LLM sees that file's contents — but it currently can't. Claude Code reads the whole repo; we get 80% of the value by reading 3–5 targeted files extracted from the error output.

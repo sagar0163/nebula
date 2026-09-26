@@ -1,1 +1,1 @@
-Go build fails: main.go references an undefined variable
+main.go calls undefined function greetUser — fix is renaming it to greet (the actual function name)

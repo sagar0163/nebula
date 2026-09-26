@@ -50,6 +50,7 @@ type HealSuggestion struct {
 	OriginalCmd string
 	FixCmd      string
 	Explanation string
+	Reasoning   string
 	Confidence  float64
 }
 
@@ -88,7 +89,8 @@ type WorkflowJob struct {
 
 // TurnRecord represents a single reasoning turn in a multi-turn healing loop.
 type TurnRecord struct {
-	FixCmd   string
-	Output   string
-	ExitCode int
+	FixCmd    string
+	Output    string
+	ExitCode  int
+	Reasoning string
 }

@@ -131,7 +131,7 @@ func TestPlannerExecutorWiring(t *testing.T) {
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, stubProvider{response: "FIX: echo ok\nEXPLANATION: works"})
 
-	planner := NewPlanner(router, newTestStore(t))
+	planner := NewPlanner(router, newTestStore(t), true)
 	sugg, err := planner.Plan(context.Background(), "cmd --fail", "boom", "", 1, nil, nil)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -346,7 +346,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	// diagnose() scrubs before building the prompt, so secrets never reach the
 	// LLM. This test asserts the fixed behaviour: the outbound request must not
 	// contain the raw secrets.
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "", 1, nil, nil)
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(failCmd), safety.ScrubSecrets(failOut), "", 1, nil, nil, true)
 	for _, secret := range []string{"sk-abc123xyz456789012345", "AKIAIOSFODNN7EXAMPLE123"} {
 		if strings.Contains(prompt, secret) {
 			t.Errorf("scrubbed prompt still contains %q", secret)
@@ -356,7 +356,7 @@ func TestDiagnosePromptDoesNotScrubSecrets(t *testing.T) {
 	rec := &recordingProvider{resp: "FIX: echo recover\nEXPLANATION: recovered"}
 	router := llm.NewRouter()
 	router.Register(llm.WorkloadDiagnose, rec)
-	planner := NewPlanner(router, newTestStore(t))
+	planner := NewPlanner(router, newTestStore(t), true)
 	sugg, err := planner.Plan(context.Background(), failCmd, failOut, "", 1, nil, nil)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -384,7 +384,7 @@ func TestDiagnosePromptStripsANSI(t *testing.T) {
 	failOut := "\x1b[31;1m--- FAIL: TestExample (0.01s)\x1b[0m\n    example_test.go:10: \x1b[33munexpected value\x1b[0m"
 	transcript := "\x1b]0;Title\x07\x1b[2KRunning..."
 
-	prompt := buildDiagnosePrompt(failCmd, failOut, transcript, 1, nil, nil)
+	prompt := buildDiagnosePrompt(failCmd, failOut, transcript, 1, nil, nil, true)
 	if strings.Contains(prompt, "\x1b[") || strings.Contains(prompt, "\x1b]") {
 		t.Fatalf("buildDiagnosePrompt contains unstripped ANSI sequences: %q", prompt)
 	}
@@ -398,7 +398,7 @@ func TestDiagnosePromptStripsANSI(t *testing.T) {
 
 func TestBudgetOutput(t *testing.T) {
 	router := llm.NewRouter()
-	planner := NewPlanner(router, newTestStore(t))
+	planner := NewPlanner(router, newTestStore(t), true)
 	ctx := context.Background()
 
 	// Short output passes through untouched
@@ -995,7 +995,7 @@ func TestPipelineNoGoroutineLeaks(t *testing.T) {
 
 func TestSessionCommandHistory(t *testing.T) {
 	sessionHistory := []string{"git add . (exit 0)"}
-	prompt := buildDiagnosePrompt("git commit", "error", "", 1, nil, sessionHistory)
+	prompt := buildDiagnosePrompt("git commit", "error", "", 1, nil, sessionHistory, true)
 
 	if !strings.Contains(prompt, "git add . (exit 0)") {
 		t.Errorf("prompt missing first command history, got:\n%s", prompt)

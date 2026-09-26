@@ -18,6 +18,7 @@ import (
 
 type Config struct {
 	HistoryDepth int
+	FileInjection bool
 }
 
 // Agent is the core orchestration loop: run command → detect failure →
@@ -47,7 +48,7 @@ func New(harness *pty.Harness, router *llm.Router, store memory.Store, cfg Confi
 		router:         router,
 		store:          store,
 		doomLoopCounts: make(map[string]int),
-		planner:        NewPlanner(router, store),
+		planner:        NewPlanner(router, store, cfg.FileInjection),
 		executor:       NewExecutor(harness, router, store),
 		sessionHistory: make([]string, 0, cfg.HistoryDepth),
 		historyDepth:   cfg.HistoryDepth,
@@ -190,9 +191,10 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 					break
 				}
 				history = append(history, models.TurnRecord{
-					FixCmd:   suggestion.FixCmd + " (applied, but original command still failed)",
-					Output:   newOutput,
-					ExitCode: verifyResult.ExitCode,
+					FixCmd:    suggestion.FixCmd + " (applied, but original command still failed)",
+					Output:    newOutput,
+					ExitCode:  verifyResult.ExitCode,
+					Reasoning: suggestion.Reasoning,
 				})
 				cmdResult = verifyResult
 			} else {
@@ -205,9 +207,10 @@ func (a *Agent) Run(ctx context.Context, args []string, opts RunOptions) (*RunRe
 				break
 			}
 			history = append(history, models.TurnRecord{
-				FixCmd:   suggestion.FixCmd,
-				Output:   newOutput,
-				ExitCode: fixResult.ExitCode,
+				FixCmd:    suggestion.FixCmd,
+				Output:    newOutput,
+				ExitCode:  fixResult.ExitCode,
+				Reasoning: suggestion.Reasoning,
 			})
 			cmdResult = fixResult
 		}

@@ -14,13 +14,15 @@ import (
 )
 
 type Planner struct {
+	fileInjection bool
 	router *llm.Router
 	store  memory.Store
 }
 
-func NewPlanner(router *llm.Router, store memory.Store) *Planner {
+func NewPlanner(router *llm.Router, store memory.Store, fileInjection bool) *Planner {
 	return &Planner{
 		router: router,
+		fileInjection: fileInjection,
 		store:  store,
 	}
 }
@@ -73,7 +75,7 @@ func (p *Planner) budgetOutput(ctx context.Context, output string) string {
 
 func (p *Planner) diagnose(ctx context.Context, cmd, output, transcript string, failExitCode int, history []models.TurnRecord, sessionHistory []string) (*models.HealSuggestion, error) {
 	output = p.budgetOutput(ctx, output)
-	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript), failExitCode, history, sessionHistory)
+	prompt := buildDiagnosePrompt(safety.ScrubSecrets(cmd), safety.ScrubSecrets(output), safety.ScrubSecrets(transcript), failExitCode, history, sessionHistory, p.fileInjection)
 	req := llm.Request{
 		SystemPrompt:   systemPrompt,
 		Messages:       []llm.Message{{Role: "user", Content: prompt}},
@@ -164,7 +166,7 @@ func (p *Planner) recallPattern(ctx context.Context, failCmd, failOutput string)
 	return nil, nil
 }
 
-func buildDiagnosePrompt(cmd, output, transcript string, failExitCode int, history []models.TurnRecord, sessionHistory []string) string {
+func buildDiagnosePrompt(cmd, output, transcript string, failExitCode int, history []models.TurnRecord, sessionHistory []string, fileInjection bool) string {
 	output = SummarizeOutput(output)
 	output = pty.StripANSI(output)
 	transcript = pty.StripANSI(transcript)
@@ -174,13 +176,28 @@ func buildDiagnosePrompt(cmd, output, transcript string, failExitCode int, histo
 	transcript = strings.ReplaceAll(transcript, "FIX:", "F-I-X:")
 	transcript = strings.ReplaceAll(transcript, "EXPLANATION:", "E-X-P-L-A-N-A-T-I-O-N:")
 
+	fileContext := ""
+	if fileInjection {
+		files := ExtractRelevantFiles(cmd, output, 3)
+		if len(files) > 0 {
+			fileContext = "Relevant files:\n```\n"
+			for _, f := range files {
+				c := ReadFileExcerpt(f, 2048)
+				if c != "" {
+					fileContext += "// " + f + "\n" + c + "\n"
+				}
+			}
+			fileContext += "```\n\n"
+		}
+	}
+
 	prompt := fmt.Sprintf(`A shell command failed. Diagnose the error and suggest a fix.
 
 Command: %s
 
-Output:
+%sOutput:
 %s
-`, cmd, output)
+`, cmd, fileContext, output)
 
 	pCtx := DetectProjectContext("")
 	if pCtxStr := pCtx.String(); pCtxStr != "" {
@@ -204,11 +221,17 @@ Output:
 		for i, h := range history {
 			prompt += fmt.Sprintf("Attempt %d: %s\nFailed with (Exit %d):\n%s\n\n", i+1, h.FixCmd, h.ExitCode, SummarizeOutput(pty.StripANSI(h.Output)))
 		}
+		// Chain-of-thought handoff: replay last turn's reasoning so the LLM
+		// can revise its own diagnosis rather than starting from scratch.
+		if last := history[len(history)-1]; strings.TrimSpace(last.Reasoning) != "" {
+			prompt += fmt.Sprintf("My prior reasoning was: %s. That fix failed with exit %d. Revise.\n\n",
+				strings.TrimSpace(last.Reasoning), last.ExitCode)
+		}
 	}
 
 	prompt += `
 Respond with valid JSON only — no markdown, no extra text:
-{"fix": "<the exact fix command>", "explanation": "<one sentence explaining what went wrong and why the fix works>"}`
+{"fix": "<the exact fix command>", "explanation": "<one sentence explaining what went wrong and why the fix works>", "reasoning": "<your diagnosis of root cause and why this fix should work>", "confidence": <0.0-1.0>}`
 
 	return prompt
 }
@@ -226,14 +249,18 @@ func parseSuggestion(originalCmd, response string) *models.HealSuggestion {
 		}
 	}
 	var parsed struct {
-		Fix         string `json:"fix"`
-		Explanation string `json:"explanation"`
+		Fix         string  `json:"fix"`
+		Explanation string  `json:"explanation"`
+		Reasoning   string  `json:"reasoning"`
+		Confidence  float64 `json:"confidence"`
 	}
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil && parsed.Fix != "" {
 		return &models.HealSuggestion{
 			OriginalCmd: originalCmd,
 			FixCmd:      parsed.Fix,
 			Explanation: parsed.Explanation,
+			Reasoning:   parsed.Reasoning,
+			Confidence:  parsed.Confidence,
 		}
 	}
 

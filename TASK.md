@@ -845,3 +845,128 @@ CI simulation: lint 0 problems, 219/219 tests passing, audit 0 vulnerabilities. 
 2. Prepend the **Project Context** section to the task description
 3. Add: *"Do all work yourself in one session. Run `go build ./...` and `go vet ./...` after changes. Commit and push when done."*
 4. Paste as the prompt to your AI CLI
+
+---
+
+## v1.0 Overhaul — General Agent (JARVIS Vision)
+
+> **Goal:** Transform Nebula from a repair daemon into a domain-agnostic 24/7 intelligent assistant. The repair capability stays — it becomes one tool among many in a general agent loop.
+
+---
+
+### TASK-062: Natural language goal intake — `nebula do <goal>`
+**Severity:** critical
+**Category:** architecture
+**Description:** Add `nebula do <natural language goal>` command. Unlike `nebula run <cmd>` (which runs a specific command and heals failures), `nebula do` takes any natural-language goal and figures out what to do: "fix the Blueprint empty-name bug", "add a test for the login endpoint", "summarise today's git commits", "find all TODO comments in the codebase". The agent plans steps, picks tools, executes, verifies.
+
+**Details:**
+- New cobra subcommand `nebula do <goal...>`
+- New `internal/agent/goal_planner.go` — takes natural language goal, uses LLM to decompose into steps
+- Each step maps to a registered tool (ShellTool, ReadFileTool, WriteFileTool, SearchTool, WebFetchTool)
+- Execute steps in sequence, pass outputs forward as context
+- Verify final outcome: if a test was mentioned, run it; if a file was to be created, check it exists
+- Branch: `feat/goal-intake`
+
+---
+
+### TASK-063: General tool registry
+**Severity:** critical
+**Category:** architecture
+**Description:** Right now Nebula's only "tool" is running a shell command and watching it. A general agent needs a tool registry: ShellTool, ReadFileTool, WriteFileTool, GrepTool, GitTool, WebFetchTool. Each tool has a name, description (for the LLM to choose it), input schema, and execute method. The LLM uses tool-calling to pick and invoke tools rather than generating raw shell commands.
+
+**Details:**
+- New `internal/tools/` package with interface `Tool { Name() string; Description() string; Execute(ctx, input) (string, error) }`
+- Implement: ShellTool, ReadFileTool, WriteFileTool, GrepTool, GitTool (log/diff/status/commit)
+- `Registry` struct: `Register(Tool)`, `Get(name) Tool`, `Descriptions() []ToolDef` (for LLM prompt)
+- Wire tool-calling: pass tool descriptions to LLM, parse tool_call responses, execute, feed result back
+- Branch: `feat/tool-registry`
+
+---
+
+### TASK-064: Project-wide codebase awareness
+**Severity:** high
+**Category:** intelligence
+**Description:** Current file injection reads only files mentioned in error output. A general agent needs to understand the whole project: directory structure, key files, conventions, recent git history. When given "fix the Blueprint empty-name bug", it must find `src/flask/blueprints.py` on its own — not wait for an error to mention it.
+
+**Details:**
+- New `internal/agent/codebase.go` — `IndexCodebase(dir string) CodebaseIndex`
+- Index: file tree (depth 3), language/framework detection, entry points, test directories, git log (last 10 commits)
+- `SearchCodebase(query string) []FileMatch` — grep + file tree to find relevant files for a goal
+- Inject compact codebase summary into every goal-planning prompt
+- Cache per session, invalidate on git commit
+- Branch: `feat/codebase-awareness`
+
+---
+
+### TASK-065: Proactive triggers — cron and file-watch modes
+**Severity:** high
+**Category:** architecture
+**Description:** A butler doesn't wait to be called. Add two proactive trigger modes: (1) cron-style scheduled tasks (`nebula schedule "every morning summarize last night's commits"`), (2) file-watch triggers (`nebula watch src/ "if any .go file changes, run go test ./..."`).
+
+**Details:**
+- New `internal/triggers/` package: `CronTrigger`, `FileWatchTrigger`
+- Config in `~/.config/nebula/triggers/` — YAML files defining trigger + goal
+- Background daemon mode: `nebula daemon start` — runs triggers, executes goals on fire
+- `nebula daemon status` — list active triggers and last fire time
+- `nebula daemon stop`
+- Branch: `feat/proactive-triggers`
+
+---
+
+### TASK-066: Persistent user and project profiles
+**Severity:** medium
+**Category:** intelligence
+**Description:** JARVIS knows Tony Stark's preferences, current projects, working style. Nebula should build up a profile of: the user's tech stack, coding conventions, preferred tools, current project goals, past interactions. This profile injects into every goal-planning prompt so suggestions are personalised.
+
+**Details:**
+- New `internal/profile/` package: `UserProfile`, `ProjectProfile`
+- UserProfile: inferred from git config, past Nebula sessions (language, tools, fix patterns)
+- ProjectProfile: repo URL, README first paragraph, open issues summary, recent activity
+- Store in existing SQLite memory store (`profiles` table, new migration)
+- Inject compact profile into every prompt: `"User: Go developer, prefers minimal abstractions. Project: nebula CLI, Go 1.22, ~5k lines."`
+- Branch: `feat/persistent-profiles`
+
+---
+
+### TASK-067: Web capability — fetch, search, read
+**Severity:** medium
+**Category:** tools
+**Description:** A general agent needs the web. "Check if there's a newer version of this dependency", "find docs for this API", "search for how to fix this error" all require web access. Add WebFetchTool and WebSearchTool to the tool registry.
+
+**Details:**
+- New `internal/tools/web.go`: `WebFetchTool` (fetch URL, return cleaned text), `WebSearchTool` (DuckDuckGo HTML scrape or SerpAPI)
+- Safety: http/https only, no local network addresses, 10s timeout, rate-limited (max 10 req/session)
+- Content extraction: strip HTML tags, keep meaningful text, cap at 4KB
+- Register in tool registry, available to goal planner
+- Branch: `feat/web-tools`
+
+---
+
+### TASK-068: `nebula fix <description>` — natural language code fix
+**Severity:** high
+**Category:** UX
+**Description:** The most common butler task. `nebula fix "Blueprint should raise ValueError for empty name"` should: find the relevant file, understand the existing pattern (there's already a dotted-name check), add the analogous empty-name check, run the test suite, verify green. This is the task SWE-bench measures — and the gap between Nebula today and a real coding assistant.
+
+**Details:**
+- Thin wrapper over `nebula do` with goal template: `"Fix the codebase so that: <description>. Run the test suite to verify. Show a diff before applying."`
+- Always runs tests after making changes
+- `nebula fix --dry-run <description>` — plan only, show proposed diff, don't apply
+- `nebula fix --verify <test-cmd> <description>` — explicit verification command
+- Branch: `feat/nebula-fix-cmd`
+
+---
+
+### TASK-069: Multi-turn conversation mode — `nebula chat`
+**Severity:** medium
+**Category:** UX
+**Description:** Sometimes a goal isn't fully specified upfront. `nebula chat` opens a persistent conversation where Nebula asks clarifying questions, takes intermediate feedback, and executes incrementally. Terminal-native assistant with tool access and project awareness.
+
+**Details:**
+- `nebula chat` — opens interactive TUI (extend existing Bubbletea TUI)
+- Each message goes through goal planner; Nebula can ask follow-up questions or take actions
+- Show tool calls in TUI as they happen: `"Reading internal/agent/agent.go..."`, `"Running go test..."`
+- Persistent conversation history in SQLite for later recall (`nebula chat --resume <id>`)
+- Branch: `feat/chat-mode`
+
+---
+

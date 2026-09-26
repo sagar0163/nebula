@@ -239,9 +239,14 @@ func buildAgent() (*agent.Agent, error) {
 	if depth <= 0 {
 		depth = 10
 	}
+	inj := true
+	if viper.IsSet("agent.agent_file_injection") {
+		inj = viper.GetBool("agent.agent_file_injection")
+	}
 	
 	return agent.New(harness, router, store, agent.Config{
 		HistoryDepth: depth,
+		FileInjection: inj,
 	}), nil
 }
 

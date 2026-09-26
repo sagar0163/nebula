@@ -130,7 +130,7 @@ func runEval(o evalOptions, parent context.Context) (*eval.Report, error) {
 
 	agentCfg := agent.Config{
 		HistoryDepth:  historyDepth(),
-		FileInjection: fileInjectionEnabled(),
+		FileInjection: true, // always on for eval: fixtures are small and models need file context
 	}
 	caseN := 0
 	factory := eval.RunnerFactory(func() (eval.AgentRunner, error) {

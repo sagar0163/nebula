@@ -1,1 +1,1 @@
-Node: package.json is missing the build script, so `npm run build` fails
+package.json build script calls a nonexistent command — fix it to a valid command

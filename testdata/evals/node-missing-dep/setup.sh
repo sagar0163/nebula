@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Creates a package.json with no "build" script, so `npm run build` fails.
+# Creates a package.json with a broken build script (wrong command) so
+# `node -e "require('./package.json')"` passes but the build script fails.
+# The fix is to update the build script to a working command.
 set -euo pipefail
 
-command -v npm >/dev/null 2>&1 || { echo "npm not available" >&2; exit 127; }
+command -v node >/dev/null 2>&1 || { echo "node not available" >&2; exit 127; }
 
 cat > package.json <<'EOF'
 {
   "name": "missing-script-fixture",
   "version": "1.0.0",
   "private": true,
-  "description": "Fixture: package.json is missing the build script.",
+  "description": "Fixture: package.json build script calls a nonexistent command.",
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js",
+    "build": "INVALID_BUILD_COMMAND_DOES_NOT_EXIST"
   }
 }
 EOF

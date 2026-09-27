@@ -442,11 +442,54 @@ func parseTestOutput(output string) (passed, failed int) {
 }
 
 // NewDefaultRegistry creates a registry with all default tools
+
+// SearchCodeTool searches for code patterns in the workspace
+type SearchCodeTool struct{}
+
+func (t *SearchCodeTool) Name() string { return "search_code" }
+func (t *SearchCodeTool) Description() string { return "Search for a regex pattern in the codebase using grep" }
+func (t *SearchCodeTool) Parameters() map[string]ParameterDef {
+	return map[string]ParameterDef{
+		"pattern": {Type: "string", Description: "The grep regular expression to search for", Required: true},
+		"dir":     {Type: "string", Description: "Directory to search within (default: .)", Required: false},
+	}
+}
+
+func (t *SearchCodeTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	pattern, ok := args["pattern"].(string)
+	if !ok || pattern == "" {
+		return nil, fmt.Errorf("missing required argument: pattern")
+	}
+
+	dir := "."
+	if d, ok := args["dir"].(string); ok && d != "" {
+		dir = d
+	}
+
+	// grep -rnIE "pattern" dir
+	cmd := exec.CommandContext(ctx, "grep", "-rnIE", pattern, dir)
+	out, err := cmd.CombinedOutput()
+	
+	if err != nil {
+		if cmd.ProcessState.ExitCode() == 1 {
+			return "No matches found.", nil
+		}
+		return nil, fmt.Errorf("grep failed: %v, output: %s", err, string(out))
+	}
+	
+	result := string(out)
+	if len(result) > 8000 {
+		result = result[:8000] + "\n... (truncated)"
+	}
+	return result, nil
+}
+
 func NewDefaultRegistry() *Registry {
 	r := NewRegistry()
 	r.Register(&ShellTool{})
 	r.Register(&ReadFileTool{})
 	r.Register(&WriteFileTool{})
+	r.Register(&SearchCodeTool{})
 	r.Register(&GrepTool{})
 	r.Register(&GitTool{})
 	r.Register(&RunTestsTool{})

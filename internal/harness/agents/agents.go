@@ -14,13 +14,14 @@ import (
 
 // PlannerAgent analyzes issues and creates execution plans
 type PlannerAgent struct {
-	router *llm.Router
-	model  shared.ModelConfig
+	router   *llm.Router
+	model    shared.ModelConfig
+	registry *tools.Registry
 }
 
 // NewPlannerAgent creates a new planner agent
-func NewPlannerAgent(router *llm.Router, model shared.ModelConfig) *PlannerAgent {
-	return &PlannerAgent{router: router, model: model}
+func NewPlannerAgent(router *llm.Router, model shared.ModelConfig, registry *tools.Registry) *PlannerAgent {
+	return &PlannerAgent{router: router, model: model, registry: registry}
 }
 
 func (p *PlannerAgent) Name() string { return "Planner" }
@@ -96,29 +97,17 @@ func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
 	b.WriteString("You are a senior engineer analyzing a GitHub issue.\n\n")
 	b.WriteString("Issue: " + input.Context + "\n\n")
 	
-	if len(input.Memory.RelevantFiles) > 0 {
-		b.WriteString("Relevant files:\n")
-		for _, f := range input.Memory.RelevantFiles {
-			b.WriteString(fmt.Sprintf("- %s: %s\n", f.Path, f.Summary))
-		}
-		b.WriteString("\n")
+	if input.Memory != nil && input.Memory.GlobalSummary != "" {
+		b.WriteString(input.Memory.GlobalSummary + "\n\n")
 	}
 	
-	if len(input.Memory.PastFixes) > 0 {
-		b.WriteString("Similar past fixes:\n")
-		for _, fix := range input.Memory.PastFixes {
-			b.WriteString(fmt.Sprintf("- %s: %s\n", fix.IssuePattern, fix.FixSummary))
-		}
-		b.WriteString("\n")
-	}
-
-	b.WriteString("Create a plan to fix this issue. Output ONLY a JSON object:\n")
+	b.WriteString("Explore the codebase using the search_code tool to find the exact files to edit.\n")
+	b.WriteString("Once you have found the files, output a final JSON plan using the DoneTool with the following JSON string in the 'plan' argument:\n")
 	b.WriteString(`{
-  "steps": [
-    {"file": "path/to/file.py", "action": "read", "description": "Understand current implementation"},
-    {"file": "path/to/file.py", "action": "edit", "description": "Fix the bug", "test_command": "pytest test_file.py -v"}
-  ],
-  "summary": "Brief summary of the approach"
+  "files_to_read": ["path/to/file1.py"],
+  "files_to_edit": ["path/to/file2.py"],
+  "failing_tests": ["tests/test_bug.py"],
+  "approach": "Brief summary of how to fix the issue"
 }`)
 
 	return b.String()

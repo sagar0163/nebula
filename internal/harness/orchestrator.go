@@ -46,7 +46,7 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 	}
 	
 	// Initialize agents with appropriate models
-	o.planner = agents.NewPlannerAgent(router, routing[shared.PhasePlanning])
+	o.planner = agents.NewPlannerAgent(router, routing[shared.PhasePlanning], o.toolRegistry)
 	o.executor = agents.NewExecutorAgent(router, routing[shared.PhaseExecution], o.toolRegistry)
 	o.verifier = agents.NewVerifierAgent(router, routing[shared.PhaseVerification])
 	// o.critic = agents.NewCriticAgent(router, routing[shared.PhaseCritique])
@@ -56,11 +56,26 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 
 // Run executes the full harness pipeline on an issue
 func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*shared.Trajectory, error) {
-	traj := &shared.Trajectory{
-		InstanceID: fmt.Sprintf("issue-%d", time.Now().Unix()),
-		StartTime:  time.Now(),
-		Status:     "running",
+	traj, err := loadTrajectory(workDir)
+	if err != nil {
+		fmt.Printf("Warning: failed to load existing trajectory: %v\n", err)
 	}
+	
+	if traj == nil {
+		traj = &shared.Trajectory{
+			InstanceID: fmt.Sprintf("issue-%d", time.Now().Unix()),
+			StartTime:  time.Now(),
+			Status:     "running",
+		}
+	} else if traj.Status == "resolved" || traj.Status == "failed" {
+		fmt.Printf("Resuming existing trajectory which is already %s\n", traj.Status)
+		return traj, nil
+	} else {
+		fmt.Printf("Resuming existing trajectory with %d steps\n", len(traj.Steps))
+	}
+	
+	// Ensure working dir metadata
+	defer saveTrajectory(workDir, traj) // Final save on exit
 	
 	// Initialize context
 	o.contextMgr.SetWorkingContext("")
@@ -81,6 +96,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		Context:    planOutput.Context,
 		Timestamp:  time.Now(),
 	})
+	saveTrajectory(workDir, traj)
 	
 	// Pass metadata down
 	planCtx.Metadata = map[string]interface{}{"workDir": workDir}
@@ -107,6 +123,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			Context:   execOutput.Context,
 			Timestamp: time.Now(),
 		})
+		saveTrajectory(workDir, traj)
 		
 		fmt.Println("=== PHASE 3: VERIFICATION ===")
 		verifyCtx := o.buildVerificationContext(execOutput.Context)
@@ -125,6 +142,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			Context:   verifyOutput.Context,
 			Timestamp: time.Now(),
 		})
+		saveTrajectory(workDir, traj)
 		
 		// Check if tests passed
 		var verifyRes map[string]interface{}

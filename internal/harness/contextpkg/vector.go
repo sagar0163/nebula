@@ -6,11 +6,7 @@ import (
 	"sort"
 )
 
-// VectorStore provides semantic search over codebase chunks
-type VectorStore interface {
-	Add(ctx context.Context, id string, text string, embedding []float32) error
-	Search(ctx context.Context, queryEmbedding []float32, topK int) ([]SearchResult, error)
-}
+
 
 // SearchResult represents a semantic search match
 type SearchResult struct {

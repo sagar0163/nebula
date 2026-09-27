@@ -36,22 +36,9 @@ Nebula is being upgraded from a self-healing terminal agent into a **full autono
 
 | Area | Current State | What's Needed | Priority |
 |---|---|---|---|
-| Executor is a stub | Returns `TODO` as path, never reads/writes real files | Real multi-step: read → analyze → write → lint loop | 🔴 Critical |
-| Verifier is a stub | Returns a fake tool call, never runs actual tests | Real: apply patch → run failing tests → parse output → return error trace | 🔴 Critical |
-| Executor↔Verifier retry loop | Not implemented | Fail → feed error to Executor → re-edit → retry (max 3) | 🔴 Critical |
-| Repo indexer | `buildRepoSummary()` returns `"Repository at <dir>"` (stub) | Real: file tree + language detection + key symbol extraction | 🔴 Critical |
-| Harness not wired to `nebula do` / `nebula fix` | Old single-pass DoGoal still used | Wire `internal/harness/Orchestrator` into CLI commands | 🔴 Critical |
-| Python/JS/TS test runners | Only Go runner exists | pytest + npm test + jest runners for SWE-bench instances | 🔴 Critical |
-| Patch extraction via git diff | `patch.go` basic — no `git apply --check` validation | Replace with `git diff --no-color` + validation before applying | 🟡 High |
-| search_code tool | Not in harness tool registry | `grep -rn` / ripgrep wrapper, returns file:line:context | 🟡 High |
-| Critic agent | Commented out (`// critic`) | LLM review of final patch for correctness + minimality | 🟢 Medium |
-| Checkpoint/resume | In-memory only — crash = restart from zero | JSONL trajectory write after each step | 🟡 High |
-| Parallelism | Sequential instances | `--concurrency N` flag, goroutine-per-instance | 🟡 High |
-| Observability | No logging | Structured JSONL log + token/cost tracking per phase | 🟡 High |
-| Symbol index (LSP/ctags) | None | ctags integration for go_to_definition + call graph | 🟢 Medium |
-| Vector DB for RAG | Interface exists, no implementation | sqlite-vec for code embeddings + semantic file search | 🟢 Medium |
-| Groq model config | `model_diagnose = "openai/gpt-oss-120b"` (invalid) | Fix to a real Groq model ID e.g. `llama-3.1-70b-versatile` | 🔴 Critical |
-| JSON parse retry | Crashes on truncated NVIDIA response | Retry up to 3× with exponential backoff in goal_planner | 🔴 Critical |
+| VerifierAgent is a stub | Returns hardcoded fake tool call, never runs real tests | Apply patch → run failing tests → parse pass/fail → return error trace | 🔴 Critical |
+| Patch validation missing | `patch.go` does `git diff` but never calls `git apply --check` | Validate patch is cleanly applicable before handing to Verifier | 🟡 High |
+| Vector DB for RAG | Interface exists in contextpkg, no implementation | sqlite-vec embeddings + semantic file search for PlannerAgent | 🟢 Medium |
 
 ---
 

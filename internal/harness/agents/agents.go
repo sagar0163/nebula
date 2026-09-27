@@ -101,7 +101,7 @@ func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
 		b.WriteString(input.Memory.GlobalSummary + "\n\n")
 	}
 	
-	b.WriteString("Explore the codebase using the search_code tool to find the exact files to edit.\n")
+	b.WriteString("Explore the codebase using the search_code and semantic_search tools to find the exact files to edit.\n")
 	b.WriteString("Once you have found the files, output a final JSON plan using the DoneTool with the following JSON string in the 'plan' argument:\n")
 	b.WriteString(`{
   "files_to_read": ["path/to/file1.py"],

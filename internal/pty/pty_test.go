@@ -95,7 +95,7 @@ func TestRunLargeOutput(t *testing.T) {
 	defer withStdinTTY(t)()
 	h := NewHarness(1<<20, 512*1024)
 	start := time.Now()
-	res, err := h.Run(context.Background(), "sh", []string{"-c", "yes n | head -c 500000"})
+	res, err := h.Run(context.Background(), "sh", []string{"-c", "python3 -c \"print('n' * 500000)\""})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestRunLargeOutput(t *testing.T) {
 func TestRunYesBoundedOutput(t *testing.T) {
 	defer withStdinTTY(t)()
 	h := NewHarness(1<<20, maxCaptureBytes)
-	res, err := h.Run(context.Background(), "sh", []string{"-c", "yes n | head -c 600000"})
+	res, err := h.Run(context.Background(), "sh", []string{"-c", "python3 -c \"print('n' * 600000)\""})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRingBufferNeverExceedsMaxSize(t *testing.T) {
 	h := NewHarness(maxSize, 512*1024)
 
 	for i := 0; i < 6; i++ {
-		res, err := h.Run(context.Background(), "sh", []string{"-c", "yes n | head -c 500000"})
+		res, err := h.Run(context.Background(), "sh", []string{"-c", "python3 -c \"print('n' * 500000)\""})
 		if err != nil {
 			t.Fatalf("Run %d: %v", i, err)
 		}

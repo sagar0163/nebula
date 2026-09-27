@@ -189,6 +189,7 @@ func TestWorkflowLoadFileChaos(t *testing.T) {
 type wfStubProvider struct{ resp string }
 
 func (wfStubProvider) Name() string                       { return "wf-stub" }
+func (wfStubProvider) ModelName(w llm.Workload) string      { return "test-model" }
 func (wfStubProvider) Available(context.Context) bool     { return true }
 func (s wfStubProvider) Complete(ctx context.Context, req llm.Request) (<-chan llm.Token, error) {
 	ch := make(chan llm.Token, 1)

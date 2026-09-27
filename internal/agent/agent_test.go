@@ -26,6 +26,7 @@ import (
 type stubProvider struct{ response string }
 
 func (stubProvider) Name() string                       { return "stub" }
+func (stubProvider) ModelName(w llm.Workload) string      { return "test-model" }
 func (stubProvider) Available(ctx context.Context) bool { return true }
 func (s stubProvider) Complete(ctx context.Context, req llm.Request) (<-chan llm.Token, error) {
 	ch := make(chan llm.Token, 1)
@@ -324,6 +325,7 @@ type recordingProvider struct {
 }
 
 func (*recordingProvider) Name() string                       { return "recorder" }
+func (*recordingProvider) ModelName(w llm.Workload) string      { return "test-model" }
 func (*recordingProvider) Available(ctx context.Context) bool { return true }
 func (r *recordingProvider) Complete(ctx context.Context, req llm.Request) (<-chan llm.Token, error) {
 	r.mu.Lock()

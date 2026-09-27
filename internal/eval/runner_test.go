@@ -536,6 +536,7 @@ type stubProvider struct {
 func (s *stubProvider) Name() string { return s.name }
 
 func (s *stubProvider) Model(llm.Workload) string { return s.model }
+func (s *stubProvider) ModelName(llm.Workload) string { return s.model }
 
 func (s *stubProvider) Available(context.Context) bool { return true }
 

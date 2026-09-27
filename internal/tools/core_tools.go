@@ -103,3 +103,18 @@ func (t *GitTool) Execute(ctx context.Context, input map[string]string) (string,
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+type DoneTool struct{}
+
+func (t *DoneTool) Name() string { return "DoneTool" }
+func (t *DoneTool) Description() string { return "Signals that the goal has been completed. Input: reason (string)." }
+func (t *DoneTool) Parameters() map[string]string {
+	return map[string]string{"reason": "Explanation of what was accomplished"}
+}
+func (t *DoneTool) Execute(ctx context.Context, input map[string]string) (string, error) {
+	reason := input["reason"]
+	if reason == "" {
+		return "", fmt.Errorf("missing reason")
+	}
+	return fmt.Sprintf("DONE: %s", reason), nil
+}

@@ -44,6 +44,8 @@ func (p *stubProvider) Complete(ctx context.Context, _ Request) (<-chan Token, e
 	close(ch)
 	return ch, nil
 }
+func (p *stubProvider) ModelName(w Workload) string { return "test-model" }
+
 func (p *stubProvider) Embed(ctx context.Context, _ string) ([]float32, error) {
 	p.calls.Add(1)
 	if p.err != nil {
@@ -229,6 +231,8 @@ func (p *slowMockProvider) Name() string {
 	return p.name
 }
 
+func (p *slowMockProvider) ModelName(w Workload) string { return "test-model" }
+
 func (p *slowMockProvider) Available(ctx context.Context) bool {
 	return true
 }
@@ -280,6 +284,8 @@ type rateLimitMockProvider struct {
 func (p *rateLimitMockProvider) Name() string {
 	return p.name
 }
+
+func (p *rateLimitMockProvider) ModelName(w Workload) string { return "test-model" }
 
 func (p *rateLimitMockProvider) Available(ctx context.Context) bool {
 	return true
@@ -395,6 +401,7 @@ type chunkedProvider struct {
 }
 
 func (p *chunkedProvider) Name() string                   { return p.name }
+func (p *chunkedProvider) ModelName(w Workload) string { return "test-model" }
 func (p *chunkedProvider) Available(context.Context) bool { return true }
 
 func (p *chunkedProvider) Complete(ctx context.Context, _ Request) (<-chan Token, error) {

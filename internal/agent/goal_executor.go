@@ -5,29 +5,29 @@ import (
 	"fmt"
 	"io"
 	"os"
+
 	"github.com/sagar0163/nebula/internal/tools"
 	"github.com/sagar0163/nebula/internal/profile"
-	
 )
 
 func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io.Writer) error {
-		tr := tools.NewRegistry()
+	tr := tools.NewRegistry()
 	tr.Register(&tools.ShellTool{})
 	tr.Register(&tools.ReadFileTool{})
 	tr.Register(&tools.WriteFileTool{})
 	tr.Register(&tools.GrepTool{})
 	tr.Register(&tools.GitTool{})
+	tr.Register(&tools.DoneTool{})
 
 	planner := NewGoalPlanner(a.router, tr)
-	
+
 	contextData := "Started goal execution."
-	
+
 	for i := 0; i < 15; i++ { // limit iterations to 15
 		dir, _ := os.Getwd()
-		codebase := IndexCodebase(dir)
 		userProf := profile.GetUserProfile()
 		projProf := profile.GetProjectProfile(dir)
-		steps, err := planner.Plan(ctx, goal, contextData, codebase, userProf, projProf)
+		steps, err := planner.Plan(ctx, goal, contextData, userProf, projProf)
 		if err != nil {
 			return err
 		}
@@ -39,7 +39,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 
 		for _, step := range steps {
 			fmt.Fprintf(out, "Executing %s...\n", step.Tool)
-			
+
 			var outStr string
 			var toolErr error
 
@@ -48,7 +48,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 				fmt.Fprintln(out, "Goal achieved:", step.Input["reason"])
 				return nil
 			}
-			
+
 			if t == nil {
 				toolErr = fmt.Errorf("unknown tool: %s", step.Tool)
 			} else {
@@ -59,7 +59,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 					}
 				}
 				toolOut, tErr := t.Execute(ctx, step.Input)
-					toolErr = tErr
+				toolErr = tErr
 				outStr = toolOut
 			}
 
@@ -70,11 +70,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 			// Add to context
 			contextData += fmt.Sprintf("\nStep: %s\nResult:\n%s\n", step.Tool, outStr)
 		}
-		
-		// Wait, a ReAct style loop uses the context to plan the next steps.
-		// If it reaches here, it has executed the plan. 
-		// We could do a verify step here or just ask the planner if it's done.
 	}
-	
+
 	return nil
 }

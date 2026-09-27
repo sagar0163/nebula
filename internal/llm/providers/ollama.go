@@ -124,10 +124,10 @@ func (p *OllamaProvider) selectModel(req llm.Request) string {
 	return "llama3.2"
 }
 
-// Model reports the model this provider uses for a workload tier. It is the
+// ModelName reports the model this provider uses for a workload tier. It is the
 // same resolution Complete performs, exposed so callers that need to label or
 // price a run do not have to duplicate the defaults.
-func (p *OllamaProvider) Model(w llm.Workload) string {
+func (p *OllamaProvider) ModelName(w llm.Workload) string {
 	return p.selectModel(llm.Request{Workload: w})
 }
 

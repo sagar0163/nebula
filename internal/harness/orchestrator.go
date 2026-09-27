@@ -31,6 +31,7 @@ type Orchestrator struct {
 	
 	maxSteps    int
 	stepTimeout time.Duration
+	MultiModel bool
 }
 
 // NewOrchestrator creates a new harness orchestrator

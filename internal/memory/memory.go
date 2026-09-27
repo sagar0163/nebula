@@ -26,6 +26,9 @@ type Store interface {
 
 
 	// General tasks
+	SavePastFix(ctx context.Context, fix PastFix) error
+	SearchPastFixes(ctx context.Context, issueQuery string, limit int) ([]PastFix, error)
+
 	SaveTask(ctx context.Context, t *models.Task) error
 	ListTasks(ctx context.Context, sessionID string, limit int) ([]*models.Task, error)
 

@@ -11,6 +11,7 @@ import (
 	"github.com/sagar0163/nebula/internal/harness/shared"
 	"github.com/sagar0163/nebula/internal/harness/tools"
 	"github.com/sagar0163/nebula/internal/llm"
+	import_mem "github.com/sagar0163/nebula/internal/memory"
 )
 
 // Orchestrator coordinates the multi-agent harness
@@ -24,6 +25,7 @@ type Orchestrator struct {
 	executor  *agents.ExecutorAgent
 	verifier  *agents.VerifierAgent
 	critic   *agents.CriticAgent
+	memStore import_mem.Store
 	
 	maxSteps    int
 	stepTimeout time.Duration
@@ -88,6 +90,18 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	// Phase 1: Planning
 	fmt.Println("=== PHASE 1: PLANNING ===")
 	planStart := time.Now()
+	
+	// Inject self-improving memory
+	if o.memStore != nil {
+		past, _ := o.memStore.SearchPastFixes(ctx, issue, 3)
+		if len(past) > 0 {
+			issue += "\n\n[NEBULA MEMORY - RELEVANT PAST FIXES]:\n"
+			for i, p := range past {
+				issue += fmt.Sprintf("Fix %d:\nIssue: %s\nPatch Summary: %s\n", i+1, p.IssuePattern, p.PatchSummary)
+			}
+		}
+	}
+	
 	planCtx := o.buildPlanningContext(issue, workDir)
 	planOutput, err := o.planner.Execute(ctx, planCtx)
 	if logger != nil {
@@ -218,6 +232,15 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 					continue // Loop back to Executor
 				}
 				fmt.Println(">> Critic approved the patch.")
+			}
+			
+			// Save successful patch to self-improving memory
+			if o.memStore != nil {
+				o.memStore.SavePastFix(ctx, import_mem.PastFix{
+					IssuePattern: issue[:min(len(issue), 500)], // Store prefix as pattern
+					PatchSummary: "Patch generated successfully for: " + traj.InstanceID,
+					Resolved:     true,
+				})
 			}
 			
 			resolved = true

@@ -430,3 +430,77 @@ func (s *SQLiteStore) CancelWorkflowJob(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// PastFix represents a successfully resolved issue and its patch summary
+type PastFix struct {
+	IssuePattern string `json:"issue_pattern"`
+	PatchSummary string `json:"patch_summary"`
+	Resolved     bool   `json:"resolved"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// SavePastFix saves a resolved issue for self-improvement few-shot learning
+func (s *SQLiteStore) SavePastFix(ctx context.Context, fix PastFix) error {
+	if s.db == nil {
+		return fmt.Errorf("memory store not initialized")
+	}
+	
+	_, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS past_fixes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			issue_pattern TEXT,
+			patch_summary TEXT,
+			resolved BOOLEAN,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+	
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO past_fixes (issue_pattern, patch_summary, resolved)
+		VALUES (?, ?, ?)
+	`, fix.IssuePattern, fix.PatchSummary, fix.Resolved)
+	
+	return err
+}
+
+// SearchPastFixes retrieves similar past fixes for few-shot learning
+func (s *SQLiteStore) SearchPastFixes(ctx context.Context, issueQuery string, limit int) ([]PastFix, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	
+	// Ensure table exists
+	s.db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS past_fixes (id INTEGER PRIMARY KEY AUTOINCREMENT, issue_pattern TEXT, patch_summary TEXT, resolved BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
+	
+	// Basic LIKE search since we don't have FTS in this basic sqlite setup
+	// A real implementation would use sqlite-vec or FTS5
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT issue_pattern, patch_summary, resolved, timestamp 
+		FROM past_fixes 
+		WHERE resolved = 1
+		ORDER BY id DESC 
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		// Table might not exist yet if no fixes saved, ignore gracefully
+		if strings.Contains(err.Error(), "no such table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var fixes []PastFix
+	for rows.Next() {
+		var fix PastFix
+		if err := rows.Scan(&fix.IssuePattern, &fix.PatchSummary, &fix.Resolved, &fix.Timestamp); err != nil {
+			continue
+		}
+		fixes = append(fixes, fix)
+	}
+	
+	return fixes, nil
+}

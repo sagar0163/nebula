@@ -7,7 +7,7 @@ set -e
 DATASET="SWE-bench_Lite"
 SPLIT="test"
 MAX_INSTANCES=5
-CONCURRENCY=2
+CONCURRENCY=1
 OUTPUT_DIR="output/swebench_eval_$(date +%Y%m%d_%H%M%S)"
 TIMEOUT="15m"
 

@@ -1,6 +1,8 @@
 package harness
 
 import (
+	"os/exec"
+	"path/filepath"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -52,6 +54,10 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 	o.executor = agents.NewExecutorAgent(router, routing[shared.PhaseExecution], o.toolRegistry)
 	o.verifier = agents.NewVerifierAgent(router, routing[shared.PhaseVerification])
 	o.critic = agents.NewCriticAgent(router, routing[shared.PhaseCritique])
+	
+	store, _ := import_mem.New("nebula_harness.db")
+	o.memStore = store
+	
 	
 	return o
 }
@@ -335,6 +341,29 @@ func (o *Orchestrator) buildVerificationContext(execContext string) shared.Agent
 }
 
 func (o *Orchestrator) buildRepoSummary(workDir string) string {
-	// TODO: Implement proper repo summarization
-	return fmt.Sprintf("Repository at %s", workDir)
+	// Execute 'find' to get a tree up to depth 3
+	cmd := exec.Command("find", ".", "-maxdepth", "3", "-not", "-path", "*/.*", "-type", "d")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	
+	dirs := string(out)
+	if err != nil || dirs == "" {
+		dirs = "<unable to list directories>"
+	} else if len(dirs) > 1000 {
+		dirs = dirs[:1000] + "\n... (truncated)"
+	}
+	
+	// Detect basic languages by checking root files
+	langs := ""
+	if _, err := exec.Command("ls", filepath.Join(workDir, "package.json")).Output(); err == nil {
+		langs += "JavaScript/Node.js detected. "
+	}
+	if _, err := exec.Command("ls", filepath.Join(workDir, "requirements.txt")).Output(); err == nil {
+		langs += "Python detected. "
+	}
+	if _, err := exec.Command("ls", filepath.Join(workDir, "go.mod")).Output(); err == nil {
+		langs += "Go detected. "
+	}
+
+	return fmt.Sprintf("Repository at %s\nPrimary languages/frameworks: %s\nDirectory Structure (depth 3):\n%s", workDir, langs, dirs)
 }

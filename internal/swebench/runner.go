@@ -3,6 +3,7 @@ package swebench
 
 import (
 	"context"
+	"sync"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -103,7 +104,7 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	}
 
 	// Create a worker pool
-	workQueue := make(chan struct{ index int; inst Instance }, len(instances))
+	workQueue := make(chan struct{ index int; inst *Instance }, len(instances))
 	resultsQueue := make(chan *Result, len(instances))
 	
 	// Enqueue work
@@ -113,7 +114,7 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 		if r.cfg.SkipResolved && existing[inst.InstanceID] != "" {
 			continue
 		}
-		workQueue <- struct{ index int; inst Instance }{i, inst}
+		workQueue <- struct{ index int; inst *Instance }{i, inst}
 		totalCount++
 	}
 	close(workQueue)
@@ -122,7 +123,7 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 		return r.finalize(), nil
 	}
 	
-	var wg import_sync.WaitGroup
+	var wg sync.WaitGroup
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
 		go func() {

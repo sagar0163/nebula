@@ -264,3 +264,79 @@ func extractJSON(text string) string {
 	
 	return ""
 }
+// CriticAgent reviews the quality of generated patches
+type CriticAgent struct {
+	router *llm.Router
+	model  shared.ModelConfig
+}
+
+// NewCriticAgent creates a new critic agent
+func NewCriticAgent(router *llm.Router, model shared.ModelConfig) *CriticAgent {
+	return &CriticAgent{router: router, model: model}
+}
+
+func (c *CriticAgent) Name() string { return "Critic" }
+func (c *CriticAgent) Phase() shared.Phase { return shared.PhaseCritique }
+
+func (c *CriticAgent) Execute(ctx context.Context, input shared.AgentInput) (shared.AgentOutput, error) {
+	fmt.Println("[Critic] Reviewing patch quality...")
+
+	patch := input.Context
+	if patch == "" || patch == "No changes were made." {
+		return shared.AgentOutput{
+			Context: `{"approved": true, "warnings": []}`,
+			Done:    true,
+		}, nil
+	}
+
+	prompt := fmt.Sprintf(`Review the following git diff patch for correctness, style, and minimality.
+Flag any test file modifications, unrelated changes, or security issues.
+If there are severe security issues or completely unrelated destructive changes, reject the patch.
+Otherwise, approve it but provide warnings.
+
+Patch:
+%s
+
+Output ONLY valid JSON in this format:
+{
+  "approved": true/false,
+  "warnings": ["warning 1", "warning 2"]
+}`, patch)
+
+	req := llm.Request{
+		Messages:       []llm.Message{{Role: "user", Content: prompt}},
+		MaxTokens:      c.model.MaxTokens,
+		Temperature:    c.model.Temperature,
+		ResponseFormat: "json",
+	}
+
+	ch, err := c.router.Complete(ctx, llm.WorkloadDiagnose, req)
+	if err != nil {
+		return shared.AgentOutput{}, err
+	}
+
+	var respBuilder strings.Builder
+	for t := range ch {
+		if t.Err != nil {
+			return shared.AgentOutput{}, t.Err
+		}
+		respBuilder.WriteString(t.Text)
+	}
+	resp := respBuilder.String()
+
+	// Ensure it parses
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
+		fmt.Printf("[Critic] Failed to parse response: %v\n", err)
+		// Default to approve on parsing failure so we don't block good code
+		return shared.AgentOutput{
+			Context: `{"approved": true, "warnings": ["Failed to parse critic output"]}`,
+			Done:    true,
+		}, nil
+	}
+
+	return shared.AgentOutput{
+		Context: resp,
+		Done:    true,
+	}, nil
+}

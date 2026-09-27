@@ -484,12 +484,57 @@ func (t *SearchCodeTool) Execute(ctx context.Context, args map[string]interface{
 	return result, nil
 }
 
+
+// GoToDefinitionTool finds symbol definitions using ctags
+type GoToDefinitionTool struct{}
+
+func (t *GoToDefinitionTool) Name() string { return "go_to_definition" }
+func (t *GoToDefinitionTool) Description() string { return "Find where a class, function, or symbol is defined in the codebase" }
+func (t *GoToDefinitionTool) Parameters() map[string]ParameterDef {
+	return map[string]ParameterDef{
+		"symbol": {Type: "string", Description: "The symbol name (e.g. 'PlannerAgent')", Required: true},
+		"dir":    {Type: "string", Description: "Directory to search within (default: .)", Required: false},
+	}
+}
+
+func (t *GoToDefinitionTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	symbol, ok := args["symbol"].(string)
+	if !ok || symbol == "" {
+		return nil, fmt.Errorf("missing required argument: symbol")
+	}
+
+	dir := "."
+	if d, ok := args["dir"].(string); ok && d != "" {
+		dir = d
+	}
+
+	// Dynamic import avoidance by just running the command directly here, 
+	// or we can just run the same sh -c ctags command. We will just execute it directly.
+	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("ctags -R -x . | grep -w '%s'", symbol))
+	cmd.Dir = dir
+	
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
+			return "No definitions found.", nil
+		}
+		return nil, fmt.Errorf("ctags failed: %v, output: %s", err, string(out))
+	}
+	
+	result := string(out)
+	if len(result) > 4000 {
+		result = result[:4000] + "\n... (truncated)"
+	}
+	return result, nil
+}
+
 func NewDefaultRegistry() *Registry {
 	r := NewRegistry()
 	r.Register(&ShellTool{})
 	r.Register(&ReadFileTool{})
 	r.Register(&WriteFileTool{})
 	r.Register(&SearchCodeTool{})
+	r.Register(&GoToDefinitionTool{})
 	r.Register(&GrepTool{})
 	r.Register(&GitTool{})
 	r.Register(&RunTestsTool{})

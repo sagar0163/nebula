@@ -23,7 +23,7 @@ type Orchestrator struct {
 	planner   *agents.PlannerAgent
 	executor  *agents.ExecutorAgent
 	verifier  *agents.VerifierAgent
-	// critic   *agents.CriticAgent // TODO: implement
+	critic   *agents.CriticAgent
 	
 	maxSteps    int
 	stepTimeout time.Duration
@@ -49,7 +49,7 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 	o.planner = agents.NewPlannerAgent(router, routing[shared.PhasePlanning], o.toolRegistry)
 	o.executor = agents.NewExecutorAgent(router, routing[shared.PhaseExecution], o.toolRegistry)
 	o.verifier = agents.NewVerifierAgent(router, routing[shared.PhaseVerification])
-	// o.critic = agents.NewCriticAgent(router, routing[shared.PhaseCritique])
+	o.critic = agents.NewCriticAgent(router, routing[shared.PhaseCritique])
 	
 	return o
 }
@@ -77,13 +77,27 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	// Ensure working dir metadata
 	defer saveTrajectory(workDir, traj) // Final save on exit
 	
+	logger, _ := NewStructuredLogger(workDir)
+	if logger != nil {
+		defer logger.Close()
+	}
+	
 	// Initialize context
 	o.contextMgr.SetWorkingContext("")
 	
 	// Phase 1: Planning
 	fmt.Println("=== PHASE 1: PLANNING ===")
+	planStart := time.Now()
 	planCtx := o.buildPlanningContext(issue, workDir)
 	planOutput, err := o.planner.Execute(ctx, planCtx)
+	if logger != nil {
+		logger.Log(LogEvent{
+			InstanceID: traj.InstanceID,
+			Phase:      string(shared.PhasePlanning),
+			DurationMs: time.Since(planStart).Milliseconds(),
+			Result:     planOutput.Context,
+		})
+	}
 	if err != nil {
 		traj.Status = "error"
 		traj.Error = fmt.Sprintf("planning failed: %v", err)
@@ -110,7 +124,16 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		execCtx := o.buildExecutionContext(execContextStr)
 		execCtx.Metadata = map[string]interface{}{"workDir": workDir}
 		
+		execStart := time.Now()
 		execOutput, err := o.executor.Execute(ctx, execCtx)
+		if logger != nil {
+			logger.Log(LogEvent{
+				InstanceID: traj.InstanceID,
+				Phase:      string(shared.PhaseExecution),
+				DurationMs: time.Since(execStart).Milliseconds(),
+				Result:     execOutput.Context,
+			})
+		}
 		if err != nil {
 			traj.Status = "error"
 			traj.Error = fmt.Sprintf("execution failed: %v", err)
@@ -129,7 +152,16 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		verifyCtx := o.buildVerificationContext(execOutput.Context)
 		verifyCtx.Metadata = map[string]interface{}{"workDir": workDir}
 		
+		verifyStart := time.Now()
 		verifyOutput, err := o.verifier.Execute(ctx, verifyCtx)
+		if logger != nil {
+			logger.Log(LogEvent{
+				InstanceID: traj.InstanceID,
+				Phase:      string(shared.PhaseVerification),
+				DurationMs: time.Since(verifyStart).Milliseconds(),
+				Result:     verifyOutput.Context,
+			})
+		}
 		if err != nil {
 			traj.Status = "error"
 			traj.Error = fmt.Sprintf("verification failed: %v", err)
@@ -149,8 +181,46 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		json.Unmarshal([]byte(verifyOutput.Context), &verifyRes)
 		
 		if passed, ok := verifyRes["passed"].(bool); ok && passed {
-			resolved = true
 			fmt.Println(">> Tests passed! Fix is verified.")
+			
+			// Phase 4: Critique
+			fmt.Println("=== PHASE 4: CRITIQUE ===")
+			criticCtx := shared.AgentInput{
+				Context: execOutput.Context, // Send the patch to critic
+				Budget:  planCtx.Budget,
+			}
+			
+			criticStart := time.Now()
+			criticOutput, err := o.critic.Execute(ctx, criticCtx)
+			if logger != nil {
+				logger.Log(LogEvent{
+					InstanceID: traj.InstanceID,
+					Phase:      string(shared.PhaseCritique),
+					DurationMs: time.Since(criticStart).Milliseconds(),
+					Result:     criticOutput.Context,
+				})
+			}
+			if err == nil {
+				traj.Steps = append(traj.Steps, shared.Step{
+					Phase:     shared.PhaseCritique,
+					ToolCalls: criticOutput.ToolCalls,
+					Context:   criticOutput.Context,
+					Timestamp: time.Now(),
+				})
+				saveTrajectory(workDir, traj)
+				
+				var criticRes map[string]interface{}
+				json.Unmarshal([]byte(criticOutput.Context), &criticRes)
+				if approved, ok := criticRes["approved"].(bool); ok && !approved {
+					fmt.Println(">> Critic rejected the patch due to security or destructive changes.")
+					resolved = false
+					execContextStr = fmt.Sprintf("Critic rejected your patch. Warnings:\n%v\nPlease fix.", criticRes["warnings"])
+					continue // Loop back to Executor
+				}
+				fmt.Println(">> Critic approved the patch.")
+			}
+			
+			resolved = true
 			break
 		} else {
 			trace, _ := verifyRes["error_trace"].(string)

@@ -27,6 +27,7 @@ import (
 	"github.com/sagar0163/nebula/internal/agent"
 	"github.com/sagar0163/nebula/internal/safety"
 	"github.com/sagar0163/nebula/internal/swebench"
+	"github.com/sagar0163/nebula/internal/harness"
 )
 
 var knownProviders = []string{"groq", "gemini", "mistral", "nvidia"}
@@ -562,31 +563,52 @@ func newWatchCmd() *cobra.Command {
 }
 
 func newDoCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "do [goal...]",
 		Short: "Achieve a natural language goal",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := buildAgent()
+			legacy, _ := cmd.Flags().GetBool("legacy")
+			if legacy {
+				a, err := buildAgent()
+				if err != nil {
+					return err
+				}
+				
+				skipPerms, _ := rootCmd.PersistentFlags().GetBool("dangerously-skip-permissions")
+				opts := agent.RunOptions{
+					DryRun:          dryRun,
+					SkipPermissions: skipPerms,
+					ApprovalFn: func(c string, _ safety.Risk) bool {
+						fmt.Fprintf(os.Stderr, "nebula: approve running %q? [y/N] ", c)
+						var resp string
+						fmt.Scanln(&resp)
+						return resp == "y" || resp == "Y"
+					},
+				}
+				
+				return a.DoGoal(cmd.Context(), strings.Join(args, " "), opts, os.Stdout)
+			}
+			
+			// Use the new Multi-Agent Harness
+			router := buildRouter("", nil)
+			orchestrator := harness.NewOrchestrator(router, nil, nil)
+			
+			workDir, _ := os.Getwd()
+			goal := strings.Join(args, " ")
+			fmt.Printf("Starting multi-agent harness for goal: %s\n", goal)
+			
+			traj, err := orchestrator.Run(cmd.Context(), goal, workDir)
 			if err != nil {
-				return err
+				return fmt.Errorf("harness failed: %w", err)
 			}
 			
-			skipPerms, _ := rootCmd.PersistentFlags().GetBool("dangerously-skip-permissions")
-			opts := agent.RunOptions{
-				DryRun:          dryRun,
-				SkipPermissions: skipPerms,
-				ApprovalFn: func(c string, _ safety.Risk) bool {
-					fmt.Fprintf(os.Stderr, "nebula: approve running %q? [y/N] ", c)
-					var resp string
-					fmt.Scanln(&resp)
-					return resp == "y" || resp == "Y"
-				},
-			}
-			
-			return a.DoGoal(cmd.Context(), strings.Join(args, " "), opts, os.Stdout)
+			fmt.Printf("Harness finished with status: %s (Steps: %d)\n", traj.Status, len(traj.Steps))
+			return nil
 		},
 	}
+	cmd.Flags().Bool("legacy", false, "Use the old single-pass goal executor instead of the multi-agent harness")
+	return cmd
 }
 
 func newFixCmd() *cobra.Command {
@@ -595,7 +617,19 @@ func newFixCmd() *cobra.Command {
 		Short: "Fix the codebase based on a natural language description",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("Running nebula fix...")
+			router := buildRouter("", nil)
+			orchestrator := harness.NewOrchestrator(router, nil, nil)
+			
+			workDir, _ := os.Getwd()
+			goal := "Fix the codebase so that: " + strings.Join(args, " ") + ". Run the test suite to verify."
+			fmt.Printf("Starting fix via multi-agent harness...\n")
+			
+			traj, err := orchestrator.Run(cmd.Context(), goal, workDir)
+			if err != nil {
+				return fmt.Errorf("fix harness failed: %w", err)
+			}
+			
+			fmt.Printf("Fix finished with status: %s\n", traj.Status)
 			return nil
 		},
 	}

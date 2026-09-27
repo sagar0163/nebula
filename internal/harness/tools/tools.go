@@ -528,6 +528,29 @@ func (t *GoToDefinitionTool) Execute(ctx context.Context, args map[string]interf
 	return result, nil
 }
 
+
+// SemanticSearchTool searches the codebase semantically
+type SemanticSearchTool struct{}
+
+func (t *SemanticSearchTool) Name() string { return "semantic_search" }
+func (t *SemanticSearchTool) Description() string { return "Search the codebase using semantic meaning instead of exact grep matching" }
+func (t *SemanticSearchTool) Parameters() map[string]ParameterDef {
+	return map[string]ParameterDef{
+		"query": {Type: "string", Description: "Natural language query", Required: true},
+	}
+}
+
+func (t *SemanticSearchTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	query, ok := args["query"].(string)
+	if !ok || query == "" {
+		return nil, fmt.Errorf("missing required argument: query")
+	}
+
+	// For now, we mock the embedding lookup and return a placeholder 
+	// since actual DB indexing happens during orchestrator init
+	return fmt.Sprintf("Semantic matches for '%s':\n(Feature in development, use search_code for exact matches)", query), nil
+}
+
 func NewDefaultRegistry() *Registry {
 	r := NewRegistry()
 	r.Register(&ShellTool{})
@@ -535,6 +558,7 @@ func NewDefaultRegistry() *Registry {
 	r.Register(&WriteFileTool{})
 	r.Register(&SearchCodeTool{})
 	r.Register(&GoToDefinitionTool{})
+	r.Register(&SemanticSearchTool{})
 	r.Register(&GrepTool{})
 	r.Register(&GitTool{})
 	r.Register(&RunTestsTool{})

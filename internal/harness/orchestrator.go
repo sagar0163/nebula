@@ -146,7 +146,30 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		execCtx.Metadata = map[string]interface{}{"workDir": workDir}
 		
 		execStart := time.Now()
-		execOutput, err := o.executor.Execute(ctx, execCtx)
+		var execOutput shared.AgentOutput
+		var err error
+		var skipCritic bool
+		
+		if o.MultiModel {
+			fmt.Println("Running multi-model consensus check...")
+			out1, err1 := o.executor.Execute(ctx, execCtx)
+			out2, err2 := o.executor.Execute(ctx, execCtx)
+			
+			if err1 == nil && err2 == nil {
+				if out1.Context == out2.Context {
+					fmt.Println("Models reached consensus! Will skip Critic.")
+					execOutput = out1
+					skipCritic = true
+				} else {
+					fmt.Println("Models diverged. Proceeding to Critic for tie-breaking...")
+					execOutput = out1
+				}
+			} else {
+				execOutput, err = out1, err1
+			}
+		} else {
+			execOutput, err = o.executor.Execute(ctx, execCtx)
+		}
 		if logger != nil {
 			logger.Log(LogEvent{
 				InstanceID: traj.InstanceID,
@@ -205,6 +228,9 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			fmt.Println(">> Tests passed! Fix is verified.")
 			
 			// Phase 4: Critique
+			if skipCritic {
+				fmt.Println("=== PHASE 4: CRITIQUE (SKIPPED DUE TO CONSENSUS) ===")
+			} else {
 			fmt.Println("=== PHASE 4: CRITIQUE ===")
 			criticCtx := shared.AgentInput{
 				Context: execOutput.Context, // Send the patch to critic
@@ -239,6 +265,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 					continue // Loop back to Executor
 				}
 				fmt.Println(">> Critic approved the patch.")
+			}
 			}
 			
 			// Save successful patch to self-improving memory

@@ -22,7 +22,8 @@ type LogEvent struct {
 
 // StructuredLogger handles writing JSONL logs
 type StructuredLogger struct {
-	file *os.File
+	file    *os.File
+	encoder *json.Encoder
 }
 
 // NewStructuredLogger creates a new JSONL logger
@@ -38,19 +39,16 @@ func NewStructuredLogger(workDir string) (*StructuredLogger, error) {
 		return nil, err
 	}
 
-	return &StructuredLogger{file: file}, nil
+	return &StructuredLogger{
+		file:    file,
+		encoder: json.NewEncoder(file),
+	}, nil
 }
 
 // Log writes an event to the JSONL log
 func (l *StructuredLogger) Log(event LogEvent) error {
 	event.Timestamp = time.Now().Format(time.RFC3339)
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	
-	_, err = l.file.Write(append(data, '\n'))
-	return err
+	return l.encoder.Encode(event)
 }
 
 // Close closes the underlying log file

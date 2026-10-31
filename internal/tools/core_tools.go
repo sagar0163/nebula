@@ -199,5 +199,32 @@ func StrReplaceInFile(path, oldStr, newStr string) (string, error) {
 	if err := os.WriteFile(path, []byte(strings.Replace(content, oldStr, newStr, 1)), info.Mode().Perm()); err != nil {
 		return "", err
 	}
+	// Lint gate: reject edits that leave a Python file syntactically invalid.
+	if strings.HasSuffix(path, ".py") {
+		if msg, bad := pythonSyntaxError(path); bad {
+			if werr := os.WriteFile(path, data, info.Mode().Perm()); werr != nil {
+				return "", fmt.Errorf("edit broke Python syntax and revert failed: %v (syntax error: %s)", werr, msg)
+			}
+			return "", fmt.Errorf("edit REVERTED: it would make %s syntactically invalid Python:\n%s\nCheck indentation and brackets in new_string and retry", path, msg)
+		}
+	}
 	return fmt.Sprintf("Replaced 1 occurrence in %s", path), nil
+}
+
+// pythonSyntaxError parses path with python3's ast module. It reports
+// (message, true) only on a real SyntaxError; if python3 is unavailable or
+// fails for another reason the edit is allowed.
+func pythonSyntaxError(path string) (string, bool) {
+	const script = `import ast, sys
+try:
+    ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])
+except SyntaxError as e:
+    print("%s line %s: %s\n%s" % (type(e).__name__, e.lineno, e.msg, (e.text or "").rstrip()))
+    sys.exit(3)
+`
+	out, err := exec.Command("python3", "-c", script, path).CombinedOutput()
+	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 3 {
+		return strings.TrimSpace(string(out)), true
+	}
+	return "", false
 }

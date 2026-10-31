@@ -697,7 +697,8 @@ func (o *Orchestrator) runPreTestLocalization(ctx context.Context, workDir strin
 		return ""
 	}
 	fmt.Println("[localization v2] Running failing tests to capture traceback...")
-	preCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	// Cap at 30s — this is best-effort hint gathering, not correctness-critical.
+	preCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(preCtx, "bash", "-c", cmd).CombinedOutput()
 	rawOutput := string(out)

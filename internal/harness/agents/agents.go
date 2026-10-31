@@ -186,6 +186,8 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 
 	// DoGoal's tools resolve relative paths against the process cwd, so
 	// switch into workDir for the duration of the run.
+	// TODO: os.Chdir is not concurrency-safe (process-wide). The swebench
+	// runner caps Concurrency to 1 until tools set cmd.Dir = workDir instead.
 	if workDir != "." {
 		if prev, err := os.Getwd(); err == nil {
 			if err := os.Chdir(workDir); err != nil {

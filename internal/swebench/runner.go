@@ -56,6 +56,13 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}
+	// TODO: ExecutorAgent.Execute uses os.Chdir, which is process-wide and not
+	// concurrency-safe; parallel instances would corrupt each other's cwd.
+	// Remove this cap once tools take an explicit working dir (cmd.Dir).
+	if cfg.Concurrency > 1 {
+		fmt.Fprintf(os.Stderr, "Warning: concurrency %d requested but the executor uses os.Chdir (not concurrency-safe); capping to 1\n", cfg.Concurrency)
+		cfg.Concurrency = 1
+	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 30 * time.Minute
 	}

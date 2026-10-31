@@ -15,6 +15,7 @@ import (
 	"github.com/sagar0163/nebula/internal/harness/shared"
 	"github.com/sagar0163/nebula/internal/harness/tools"
 	"github.com/sagar0163/nebula/internal/llm"
+	"github.com/sagar0163/nebula/internal/swebench/localize"
 	import_mem "github.com/sagar0163/nebula/internal/memory"
 )
 
@@ -155,6 +156,12 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		}
 	}
 	
+	// Localization hints: traceback frames and symbols from the issue text.
+	if hints := localize.Hints(o.issue); hints != "" {
+		fmt.Print(hints)
+		issue += "\n\n[LOCALIZATION HINTS]\n" + hints
+	}
+
 	planCtx := o.buildPlanningContext(issue, workDir)
 	planOutput, err := o.planner.Execute(ctx, planCtx)
 	if logger != nil {

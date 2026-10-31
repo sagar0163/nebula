@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -14,20 +15,36 @@ import (
 const maxGoalIterations = 25
 
 // summarizeArgs renders tool args compactly for logs so edits are visible.
-func summarizeArgs(in map[string]string) string {
+func summarizeArgs(in map[string]interface{}) string {
 	var b strings.Builder
 	for _, k := range []string{"path", "command", "pattern", "old_string", "new_string", "content", "reason"} {
 		v, ok := in[k]
 		if !ok {
 			continue
 		}
-		v = strings.ReplaceAll(v, "\n", "\\n")
-		if len(v) > 200 {
-			v = v[:200] + "..."
+		s := fmt.Sprintf("%v", v)
+		s = strings.ReplaceAll(s, "\n", "\\n")
+		if len(s) > 200 {
+			s = s[:200] + "..."
 		}
-		fmt.Fprintf(&b, " %s=%q", k, v)
+		fmt.Fprintf(&b, " %s=%q", k, s)
 	}
 	return b.String()
+}
+
+// toStringMap converts map[string]interface{} to map[string]string for tool execution.
+func toStringMap(m map[string]interface{}) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			out[k] = val
+		default:
+			b, _ := json.Marshal(val)
+			out[k] = string(b)
+		}
+	}
+	return out
 }
 
 func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io.Writer) error {
@@ -63,6 +80,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 		{
 			step := steps[0]
 			fmt.Fprintf(out, "[step %d/%d] Executing %s:%s\n", i+1, maxGoalIterations, step.Tool, summarizeArgs(step.Input))
+			strInput := toStringMap(step.Input)
 
 			var outStr string
 			var toolErr error
@@ -74,7 +92,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 					contextData += fmt.Sprintf("\nStep %d: DoneTool REJECTED - you have not modified any file yet. Use ReadFileTool to see the exact code, then StrReplaceTool to apply the fix before calling DoneTool.\n", i+1)
 					continue
 				}
-				fmt.Fprintln(out, "Goal achieved:", step.Input["reason"])
+				fmt.Fprintln(out, "Goal achieved:", strInput["reason"])
 				return nil
 			}
 
@@ -83,11 +101,11 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 			} else {
 				// Intercept ShellTool for approval
 				if step.Tool == "ShellTool" && opts.ApprovalFn != nil && !opts.SkipPermissions {
-					if !opts.ApprovalFn(step.Input["command"], 0) {
-						return fmt.Errorf("user rejected command: %s", step.Input["command"])
+					if !opts.ApprovalFn(strInput["command"], 0) {
+						return fmt.Errorf("user rejected command: %s", strInput["command"])
 					}
 				}
-				toolOut, tErr := t.Execute(ctx, step.Input)
+				toolOut, tErr := t.Execute(ctx, strInput)
 				toolErr = tErr
 				outStr = toolOut
 			}
@@ -112,3 +130,4 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 	fmt.Fprintf(out, "Reached iteration limit (%d) without DoneTool.\n", maxGoalIterations)
 	return nil
 }
+

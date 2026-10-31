@@ -200,7 +200,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	
 	for attempt := 1; attempt <= 3; attempt++ {
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
-		goal := o.issue
+		goal := o.issue + "\n\nPlanning context:\n" + execContextStr
 		if attempt > 1 {
 			trimmed := strings.TrimSpace(prevPatch)
 			if trimmed == "" || trimmed == "No changes were made." {

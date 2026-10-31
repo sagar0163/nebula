@@ -36,7 +36,8 @@ Available tools:
 %s
 
 Decide the SINGLE next step to take, based on the context so far (results of previous steps are included above).
-Return ONLY a JSON object with this exact structure, containing exactly one step:
+Think through the problem briefly, then output your decision as a JSON object.
+Your response must END with a JSON object with this exact structure, containing exactly one step:
 {
   "steps": [
     {"tool": "ReadFileTool", "input": {"path": "path/to/file"}}
@@ -59,13 +60,12 @@ Do NOT modify test files; fix the source code so the failing tests pass. If an e
 Call DoneTool ONLY after StrReplaceTool or WriteFileTool has successfully changed a file (never as the first step). Output {"steps": [{"tool": "DoneTool", "input": {"reason": "..."}}]} in your JSON.
 The "tool" field is just a string in your JSON reply - do not make native function/tool calls.
 
-Do not include any explanation, markdown, or text outside the JSON.`, goal, contextData, p.tools.FormatPrompt())
+You may write brief reasoning first, but the last thing in your response must be the JSON object.`, goal, contextData, p.tools.FormatPrompt())
 
 	req := llm.Request{
 		Messages:       []llm.Message{{Role: "user", Content: prompt}},
 		MaxTokens:      4096,
 		Temperature:    0.1,
-		ResponseFormat: "json",
 	}
 
 	const maxRetries = 3
@@ -103,7 +103,7 @@ Do not include any explanation, markdown, or text outside the JSON.`, goal, cont
 		if err := json.Unmarshal([]byte(jsonStr), &plan); err != nil {
 			lastErr = fmt.Errorf("failed to parse goal plan (attempt %d/%d): %w", attempt+1, maxRetries+1, err)
 			req.Messages = append(req.Messages, llm.Message{Role: "assistant", Content: res})
-			req.Messages = append(req.Messages, llm.Message{Role: "user", Content: fmt.Sprintf("Your last response was invalid JSON: %v. Please output ONLY valid JSON without markdown or text.", err)})
+			req.Messages = append(req.Messages, llm.Message{Role: "user", Content: fmt.Sprintf("Your last response was invalid JSON: %v. Please end your response with a single valid JSON object.", err)})
 			time.Sleep(2 * time.Second)
 			continue
 		}

@@ -372,7 +372,15 @@ func (r *Runner) applyPatchAndTest(ctx context.Context, workDir string, inst *In
 	return fmt.Errorf("max retries exceeded")
 }
 
-// runTests detects the language and runs appropriate tests
+// runTests detects the language and runs appropriate tests.
+//
+// WARNING (issue #46): this is a LOCAL heuristic test runner, NOT the official
+// SWE-bench evaluation harness. It does not use the per-instance Docker
+// images, does not run the exact FAIL_TO_PASS / PASS_TO_PASS test lists with
+// the official log parsers, and treats any zero-exit test command as a pass.
+// "Resolved" numbers produced here are NOT comparable to published SWE-bench
+// scores. Always score predictions with the official harness
+// (swebench.harness.run_evaluation) before reporting results.
 func (r *Runner) runTests(ctx context.Context, workDir string) (*testrunner.TestResult, error) {
 	// Try Go test runner first
 	goRunner := &testrunner.GoTestRunner{}

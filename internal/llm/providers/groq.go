@@ -102,6 +102,9 @@ func (p *GroqProvider) Embed(_ context.Context, _ string) ([]float32, error) {
 }
 
 func (p *GroqProvider) selectModel(req llm.Request) string {
+	if req.Model != "" {
+		return req.Model
+	}
 	switch req.Workload {
 	case llm.WorkloadDiagnose:
 		if p.cfg.ModelDiagnose != "" {

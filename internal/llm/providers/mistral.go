@@ -123,6 +123,9 @@ func (p *MistralProvider) Embed(ctx context.Context, text string) ([]float32, er
 }
 
 func (p *MistralProvider) selectModel(req llm.Request) string {
+	if req.Model != "" {
+		return req.Model
+	}
 	switch req.Workload {
 	case llm.WorkloadDiagnose:
 		if p.cfg.ModelDiagnose != "" {

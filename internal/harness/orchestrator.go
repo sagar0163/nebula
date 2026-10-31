@@ -34,6 +34,22 @@ type Orchestrator struct {
 	maxSteps    int
 	stepTimeout time.Duration
 	MultiModel bool
+
+	// issue is the original issue/goal text, kept so the executor can run the
+	// real goal instead of only the plan summary.
+	issue string
+
+	// failingTests are the FAIL_TO_PASS test identifiers the verifier should run.
+	failingTests []string
+	// testPatch is a patch adding/updating the failing tests (SWE-bench test_patch).
+	testPatch string
+}
+
+// SetTestContext supplies the FAIL_TO_PASS tests and the test patch for the
+// next Run. Either may be empty.
+func (o *Orchestrator) SetTestContext(failingTests []string, testPatch string) {
+	o.failingTests = failingTests
+	o.testPatch = testPatch
 }
 
 // NewOrchestrator creates a new harness orchestrator
@@ -58,8 +74,16 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 	o.verifier = agents.NewVerifierAgent(router, routing[shared.PhaseVerification])
 	o.critic = agents.NewCriticAgent(router, routing[shared.PhaseCritique])
 	
-	store, _ := import_mem.New("nebula_harness.db")
-	o.memStore = store
+	// Keep the memory DB out of the target repo (e.g. /testbed).
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	dbPath := filepath.Join(cacheDir, "nebula", "harness.db")
+	_ = os.MkdirAll(filepath.Dir(dbPath), 0755)
+	if store, err := import_mem.New(dbPath); err == nil {
+		o.memStore = store
+	}
 	
 	
 	return o
@@ -67,6 +91,7 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 
 // Run executes the full harness pipeline on an issue
 func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*shared.Trajectory, error) {
+	o.issue = issue
 	traj, err := loadTrajectory(workDir)
 	if err != nil {
 		fmt.Printf("Warning: failed to load existing trajectory: %v\n", err)
@@ -78,11 +103,30 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			StartTime:  time.Now(),
 			Status:     "running",
 		}
-	} else if traj.Status == "resolved" || traj.Status == "failed" {
-		fmt.Printf("Resuming existing trajectory which is already %s\n", traj.Status)
-		return traj, nil
+	} else if traj.Status != "running" {
+		// Only an interrupted (running) trajectory is resumable; anything else
+		// is stale and must not block a fresh run.
+		fmt.Printf("Discarding stale trajectory with status %q\n", traj.Status)
+		if err := deleteTrajectory(workDir); err != nil {
+			fmt.Printf("Warning: failed to delete stale trajectory: %v\n", err)
+		}
+		traj = &shared.Trajectory{
+			InstanceID: fmt.Sprintf("issue-%d", time.Now().Unix()),
+			StartTime:  time.Now(),
+			Status:     "running",
+		}
 	} else {
 		fmt.Printf("Resuming existing trajectory with %d steps\n", len(traj.Steps))
+	}
+
+	// Apply the test patch so the failing tests exist; revert it on exit.
+	if o.testPatch != "" {
+		testFiles, err := applyTestPatch(ctx, workDir, o.testPatch)
+		if err != nil {
+			fmt.Printf("Warning: failed to apply test patch: %v\n", err)
+		} else if len(testFiles) > 0 {
+			defer revertFiles(workDir, testFiles)
+		}
 	}
 	
 	// Ensure working dir metadata
@@ -137,6 +181,17 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	
 	// Pass metadata down
 	planCtx.Metadata = map[string]interface{}{"workDir": workDir}
+
+	// Merge failing tests discovered by the planner with any supplied ones.
+	var planOut struct {
+		FailingTests []string `json:"failing_tests"`
+	}
+	if json.Unmarshal([]byte(planOutput.Context), &planOut) == nil && len(o.failingTests) == 0 {
+		o.failingTests = planOut.FailingTests
+	}
+	if len(o.failingTests) == 0 {
+		o.failingTests = extractFailingTests(o.issue)
+	}
 	
 	// Executor-Verifier Retry Loop
 	execContextStr := planOutput.Context
@@ -144,8 +199,24 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	
 	for attempt := 1; attempt <= 3; attempt++ {
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
+		if attempt > 1 {
+			// Reset the working tree so this attempt doesn't build on the last
+			// attempt's broken edits. Re-apply the test patch afterwards.
+			exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
+			exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
+			if o.testPatch != "" {
+				if _, err := applyTestPatch(ctx, workDir, o.testPatch); err != nil {
+					fmt.Printf("Warning: failed to re-apply test patch: %v\n", err)
+				}
+			}
+		}
+
 		execCtx := o.buildExecutionContext(execContextStr)
-		execCtx.Metadata = map[string]interface{}{"workDir": workDir}
+		goal := o.issue
+		if attempt > 1 {
+			goal = o.issue + "\n\nPrevious attempt failed. Error trace:\n" + execContextStr
+		}
+		execCtx.Metadata = map[string]interface{}{"workDir": workDir, "goal": goal}
 		
 		execStart := time.Now()
 		var execOutput shared.AgentOutput
@@ -195,8 +266,11 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		saveTrajectory(workDir, traj)
 		
 		fmt.Println("=== PHASE 3: VERIFICATION ===")
-		verifyCtx := o.buildVerificationContext(execOutput.Context)
-		verifyCtx.Metadata = map[string]interface{}{"workDir": workDir}
+		verifyCtx := o.buildVerificationContext(execOutput.Context, o.failingTests)
+		if verifyCtx.Metadata == nil {
+			verifyCtx.Metadata = map[string]interface{}{}
+		}
+		verifyCtx.Metadata["workDir"] = workDir
 		
 		verifyStart := time.Now()
 		verifyOutput, err := o.verifier.Execute(ctx, verifyCtx)
@@ -348,7 +422,7 @@ func (o *Orchestrator) buildExecutionContext(planContext string) shared.AgentInp
 	}
 }
 
-func (o *Orchestrator) buildVerificationContext(execContext string) shared.AgentInput {
+func (o *Orchestrator) buildVerificationContext(execContext string, failingTests []string) shared.AgentInput {
 	tools := make([]shared.ToolDefinition, len(o.toolRegistry.Definitions()))
 	for i, t := range o.toolRegistry.Definitions() {
 		tools[i] = shared.ToolDefinition{
@@ -357,10 +431,16 @@ func (o *Orchestrator) buildVerificationContext(execContext string) shared.Agent
 			Parameters:  t.Parameters,
 		}
 	}
-	
+
+	metadata := map[string]interface{}{}
+	if len(failingTests) > 0 {
+		metadata["failingTests"] = failingTests
+	}
+
 	return shared.AgentInput{
-		Context: execContext,
-		Tools:   tools,
+		Context:  execContext,
+		Tools:    tools,
+		Metadata: metadata,
 		Budget: shared.TokenBudget{
 			Total: 2000,
 			PerPhase: map[shared.Phase]int{
@@ -368,6 +448,49 @@ func (o *Orchestrator) buildVerificationContext(execContext string) shared.Agent
 			},
 		},
 	}
+}
+
+// extractFailingTests pulls the list of target tests out of the original issue
+// text by looking for the common "so the following tests pass:" marker.
+func extractFailingTests(issue string) []string {
+	const marker = "so the following tests pass:"
+	lower := strings.ToLower(issue)
+	idx := strings.Index(lower, marker)
+	if idx < 0 {
+		return nil
+	}
+
+	rest := issue[idx+len(marker):]
+	var tests []string
+	for _, line := range strings.Split(rest, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			if len(tests) > 0 {
+				break
+			}
+			continue
+		}
+		// Stop if we hit a new section/heading.
+		if strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "-*"))
+		trimmed = strings.Trim(trimmed, "`")
+		for _, field := range strings.FieldsFunc(trimmed, func(r rune) bool {
+			return r == ' ' || r == ',' || r == '\t'
+		}) {
+			field = strings.Trim(field, "`\"'")
+			if field == "" {
+				continue
+			}
+			// Keep tokens that look like test identifiers.
+			if strings.Contains(field, "::") || strings.Contains(field, ".py") ||
+				strings.HasPrefix(field, "test") || strings.Contains(field, "/test") {
+				tests = append(tests, field)
+			}
+		}
+	}
+	return tests
 }
 
 func (o *Orchestrator) buildRepoSummary(workDir string) string {
@@ -427,4 +550,39 @@ func (o *Orchestrator) buildRepoSummary(workDir string) string {
 	}
 
 	return fmt.Sprintf("Repository at %s\nPrimary languages/frameworks: %s\nDirectory Structure (depth 3):\n%s", workDir, langs, dirs)
+}
+// deleteTrajectory removes the persisted trajectory for workDir.
+func deleteTrajectory(workDir string) error {
+	err := os.Remove(filepath.Join(workDir, ".nebula", "trajectory.json"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// applyTestPatch applies patch with `git apply --whitespace=fix` and returns
+// the files it touches.
+func applyTestPatch(ctx context.Context, workDir, patch string) ([]string, error) {
+	var files []string
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "+++ b/") {
+			files = append(files, strings.TrimPrefix(line, "+++ b/"))
+		}
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", workDir, "apply", "--whitespace=fix", "-")
+	cmd.Stdin = strings.NewReader(patch)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("git apply: %v: %s", err, out)
+	}
+	return files, nil
+}
+
+// revertFiles restores tracked files and removes untracked ones added by the test patch.
+func revertFiles(workDir string, files []string) {
+	for _, f := range files {
+		if exec.Command("git", "-C", workDir, "checkout", "--", f).Run() != nil {
+			// Not tracked at HEAD: the patch created it.
+			os.Remove(filepath.Join(workDir, f))
+		}
+	}
 }

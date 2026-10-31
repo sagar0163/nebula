@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/sagar0163/nebula/internal/agent"
 	"github.com/sagar0163/nebula/internal/harness/shared"
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/harness/tools"
-	"os/exec"
 )
 
 // PlannerAgent analyzes issues and creates execution plans
@@ -38,7 +42,7 @@ func (p *PlannerAgent) Execute(ctx context.Context, input shared.AgentInput) (sh
 		ResponseFormat: "json",
 	}
 
-	tokens, err := p.router.Complete(ctx, llm.WorkloadDiagnose, req)
+	tokens, err := p.router.CompleteWithConfig(ctx, llm.ModelConfig{Provider: p.model.Provider, Model: p.model.Model}, llm.WorkloadDiagnose, req)
 	if err != nil {
 		return shared.AgentOutput{}, err
 	}
@@ -64,33 +68,42 @@ func (p *PlannerAgent) Execute(ctx context.Context, input shared.AgentInput) (sh
 
 	// Convert plan to tool calls
 	toolCalls := []shared.ToolCall{}
-	for i, step := range plan.Steps {
+	for i, f := range plan.FilesToRead {
 		toolCalls = append(toolCalls, shared.ToolCall{
-			ID:        fmt.Sprintf("plan_step_%d", i),
-			Name:      "plan_step",
-			Arguments: map[string]interface{}{"step": step},
-			RequestID: fmt.Sprintf("plan_%d", i),
+			ID:        fmt.Sprintf("plan_read_%d", i),
+			Name:      "read_file",
+			Arguments: map[string]interface{}{"path": f},
+			RequestID: fmt.Sprintf("plan_read_%d", i),
 		})
+	}
+	for i, f := range plan.FilesToEdit {
+		toolCalls = append(toolCalls, shared.ToolCall{
+			ID:        fmt.Sprintf("plan_edit_%d", i),
+			Name:      "edit_file",
+			Arguments: map[string]interface{}{"path": f, "approach": plan.Approach},
+			RequestID: fmt.Sprintf("plan_edit_%d", i),
+		})
+	}
+
+	// Context is the plan as JSON so the orchestrator can extract failing_tests.
+	ctxJSON, err := json.Marshal(plan)
+	if err != nil {
+		return shared.AgentOutput{}, fmt.Errorf("failed to encode plan: %w", err)
 	}
 
 	return shared.AgentOutput{
 		ToolCalls: toolCalls,
-		Context:   fmt.Sprintf("Plan created with %d steps: %s", len(plan.Steps), plan.Summary),
+		Context:   string(ctxJSON),
 		Done:      true,
 	}, nil
 }
 
+// Plan is the planner's output schema; it matches the JSON requested in buildPrompt.
 type Plan struct {
-	Steps   []PlanStep `json:"steps"`
-	Summary string     `json:"summary"`
-}
-
-type PlanStep struct {
-	File        string   `json:"file"`
-	Action      string   `json:"action"` // "read", "edit", "create"
-	Description string   `json:"description"`
-	TestCommand string   `json:"test_command,omitempty"`
-	Symbols     []string `json:"symbols,omitempty"`
+	FilesToRead  []string `json:"files_to_read"`
+	FilesToEdit  []string `json:"files_to_edit"`
+	FailingTests []string `json:"failing_tests"`
+	Approach     string   `json:"approach"`
 }
 
 func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
@@ -102,8 +115,9 @@ func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
 		b.WriteString(input.Memory.GlobalSummary + "\n\n")
 	}
 	
-	b.WriteString("Explore the codebase using the search_code and semantic_search tools to find the exact files to edit.\n")
-	b.WriteString("Once you have found the files, output a final JSON plan using the DoneTool with the following JSON string in the 'plan' argument:\n")
+	b.WriteString("Based on the issue and repository layout, identify the files that need to be read and edited.\n")
+	b.WriteString("Include any files you want examined in files_to_read.\n")
+	b.WriteString("Output your final JSON answer and nothing else, using exactly this schema:\n")
 	b.WriteString(`{
   "files_to_read": ["path/to/file1.py"],
   "files_to_edit": ["path/to/file2.py"],
@@ -116,13 +130,16 @@ func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
 
 // ExecutorAgent implements code changes
 type ExecutorAgent struct {
-	router   *llm.Router
-	model    shared.ModelConfig
-	registry *tools.Registry
+	router      *llm.Router
+	model       shared.ModelConfig
+	registry    *tools.Registry
+	agentRunner *agent.Agent
 }
 
 func NewExecutorAgent(router *llm.Router, model shared.ModelConfig, registry *tools.Registry) *ExecutorAgent {
-	return &ExecutorAgent{router: router, model: model, registry: registry}
+	// DoGoal only needs the LLM router; no PTY harness or memory store is required.
+	runner := agent.New(nil, router, nil, agent.Config{HistoryDepth: 10})
+	return &ExecutorAgent{router: router, model: model, registry: registry, agentRunner: runner}
 }
 
 func (e *ExecutorAgent) Name() string { return "Executor" }
@@ -130,83 +147,62 @@ func (e *ExecutorAgent) Phase() shared.Phase { return shared.PhaseExecution }
 
 func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (shared.AgentOutput, error) {
 	fmt.Println("[Executor] Generating and applying fixes based on plan...")
-	
-	// Mini ReAct loop for executor to read files, write fixes, and run linters
-	loopContext := input.Context
-	
+
 	// Extract the workspace from metadata if available, otherwise assume current dir
 	workDir := "."
 	if dir, ok := input.Metadata["workDir"].(string); ok && dir != "" {
 		workDir = dir
 	}
-	
-	// Create a branch or stash here in a real implementation (TASK-080)
-	// For now, we'll just run the loop
-	
-	for i := 0; i < 5; i++ {
-		req := llm.Request{
-			SystemPrompt: "You are an expert coder. Follow the plan. Use read_file to analyze, write_file to apply fixes, shell to run linters. Output a JSON object with 'tool' and 'arguments'. If done, output 'tool': 'DoneTool'.",
-			Messages:       []llm.Message{{Role: "user", Content: loopContext}},
-			MaxTokens:      e.model.MaxTokens,
-			Temperature:    e.model.Temperature,
-			ResponseFormat: "json",
-		}
-		
-		ch, err := e.router.Complete(ctx, llm.WorkloadHeal, req)
-		if err != nil {
-			return shared.AgentOutput{}, err
-		}
-		
-		var respBuilder strings.Builder
-		for t := range ch {
-			if t.Err != nil {
-				return shared.AgentOutput{}, t.Err
+
+	// Prefer the original issue/goal over the plan summary.
+	goal := ""
+	if g, ok := input.Metadata["goal"].(string); ok && g != "" {
+		goal = g
+	}
+	if goal == "" {
+		goal = input.Context
+	}
+
+	// Run the goal executor in-process (issue #21: shelling out to `nebula do`
+	// re-entered the harness and recursed forever).
+	fmt.Printf("[Executor] Running DoGoal in %s\n", workDir)
+	runCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
+	defer cancel()
+
+	// DoGoal's tools resolve relative paths against the process cwd, so
+	// switch into workDir for the duration of the run.
+	if workDir != "." {
+		if prev, err := os.Getwd(); err == nil {
+			if err := os.Chdir(workDir); err != nil {
+				return shared.AgentOutput{}, fmt.Errorf("chdir %s: %w", workDir, err)
 			}
-			respBuilder.WriteString(t.Text)
-		}
-		resp := respBuilder.String()
-		
-		var parsed map[string]interface{}
-		if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
-			loopContext += "\nError parsing JSON: " + err.Error() + ". Please output valid JSON only."
-			continue
-		}
-		
-		toolName, _ := parsed["tool"].(string)
-		if toolName == "DoneTool" || toolName == "" {
-			break
-		}
-		
-		args, _ := parsed["arguments"].(map[string]interface{})
-		
-		t := e.registry.Get(toolName)
-		if t == nil {
-			loopContext += fmt.Sprintf("\nError: Tool %s not found.", toolName)
-			continue
-		}
-		
-		fmt.Printf("[Executor] Calling tool: %s\n", toolName)
-		res, err := t.Execute(ctx, args)
-		if err != nil {
-			loopContext += fmt.Sprintf("\nTool %s failed: %v", toolName, err)
-		} else {
-			loopContext += fmt.Sprintf("\nTool %s success: %v", toolName, res)
+			defer os.Chdir(prev)
 		}
 	}
-	
+
+	if runErr := e.agentRunner.DoGoal(runCtx, goal, agent.RunOptions{SkipPermissions: true}, io.Discard); runErr != nil {
+		fmt.Printf("[Executor] DoGoal exited with error: %v\n", runErr)
+	} else {
+		fmt.Println("[Executor] DoGoal completed.")
+	}
+
 	// Extract unified diff patch
 	fmt.Println("[Executor] Extracting git diff...")
-	cmd := exec.CommandContext(ctx, "git", "-C", workDir, "diff", "--no-color")
-	out, err := cmd.CombinedOutput()
-	if err != nil && cmd.ProcessState.ExitCode() != 0 && cmd.ProcessState.ExitCode() != 1 {
-		return shared.AgentOutput{}, fmt.Errorf("git diff failed: %v, %s", err, string(out))
+	// Stage everything (incl. new untracked files) so the diff captures them,
+	// then unstage so the index isn't left permanently modified.
+	exec.CommandContext(ctx, "git", "-C", workDir, "add", "-A", "--", ".", ":(exclude).nebula").Run()
+	diffCmd := exec.CommandContext(ctx, "git", "-C", workDir, "diff", "--cached", "--no-color")
+	diffOut, diffErr := diffCmd.CombinedOutput()
+	exec.CommandContext(ctx, "git", "-C", workDir, "reset", "-q").Run()
+	if diffErr != nil && diffCmd.ProcessState != nil && diffCmd.ProcessState.ExitCode() != 0 && diffCmd.ProcessState.ExitCode() != 1 {
+		return shared.AgentOutput{}, fmt.Errorf("git diff failed: %v, %s", diffErr, string(diffOut))
 	}
-	
-	patch := string(out)
+
+	patch := string(diffOut)
 	if patch == "" {
 		patch = "No changes were made."
 	}
-	
+
 	return shared.AgentOutput{
 		Context: patch,
 		Done:    true,
@@ -258,8 +254,22 @@ func (v *VerifierAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 		return v.fallbackLLMVerifier(ctx, patch)
 	}
 	
+	// Only run the failing tests; running the full suite with -x lets
+	// unrelated failures mask a real fix.
+	var failingTests []string
+	if ft, ok := input.Metadata["failingTests"]; ok && ft != nil {
+		failingTests = toStringSlice(ft)
+	}
+	filter := strings.Join(failingTests, " ")
+	if len(failingTests) == 0 && filter == "" {
+		return shared.AgentOutput{
+			Context: `{"passed": false, "error_trace": "No failing tests specified — cannot verify"}`,
+			Done:    true,
+		}, nil
+	}
+
 	// Apply patch
-	patchResult, err := runner.RunTests(ctx, workDir, "")
+	patchResult, err := runner.RunTests(ctx, workDir, filter)
 	if err != nil {
 		return shared.AgentOutput{
 			Context: fmt.Sprintf(`{"passed": false, "error_trace": %q}`, err.Error()),
@@ -281,12 +291,12 @@ func (v *VerifierAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 }
 
 func (v *VerifierAgent) fallbackLLMVerifier(ctx context.Context, patch string) (shared.AgentOutput, error) {
-	prompt := fmt.Sprintf(`You are the VerifierAgent.
+	prompt := fmt.Sprintf(`You are reviewing a code patch.
 Review the following patch and determine if it theoretically passes the intended tests and fixes the bug without introducing regressions.
 Patch:
 %s
 
-Output ONLY valid JSON in this format:
+Do not call any tools. Output your final JSON answer only, in this format:
 {
   "passed": true/false,
   "error_trace": "If passed is false, explain why the patch fails or what is missing."
@@ -299,7 +309,7 @@ Output ONLY valid JSON in this format:
 		ResponseFormat: "json",
 	}
 
-	ch, err := v.router.Complete(ctx, llm.WorkloadDiagnose, req)
+	ch, err := v.router.CompleteWithConfig(ctx, llm.ModelConfig{Provider: v.model.Provider, Model: v.model.Model}, llm.WorkloadDiagnose, req)
 	if err != nil {
 		return shared.AgentOutput{}, err
 	}
@@ -318,6 +328,30 @@ Output ONLY valid JSON in this format:
 		Context: resp,
 		Done:    true,
 	}, nil
+}
+
+// toStringSlice normalizes a metadata value into a []string, handling both
+// []string and the []interface{} form produced by JSON decoding.
+func toStringSlice(v interface{}) []string {
+	switch val := v.(type) {
+	case []string:
+		return val
+	case []interface{}:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if val == "" {
+			return nil
+		}
+		return strings.Fields(val)
+	default:
+		return nil
+	}
 }
 
 func extractJSON(text string) string {
@@ -379,7 +413,7 @@ Otherwise, approve it but provide warnings.
 Patch:
 %s
 
-Output ONLY valid JSON in this format:
+Do not call any tools. Output your final JSON answer only, in this format:
 {
   "approved": true/false,
   "warnings": ["warning 1", "warning 2"]
@@ -392,7 +426,7 @@ Output ONLY valid JSON in this format:
 		ResponseFormat: "json",
 	}
 
-	ch, err := c.router.Complete(ctx, llm.WorkloadDiagnose, req)
+	ch, err := c.router.CompleteWithConfig(ctx, llm.ModelConfig{Provider: c.model.Provider, Model: c.model.Model}, llm.WorkloadDiagnose, req)
 	if err != nil {
 		return shared.AgentOutput{}, err
 	}
@@ -404,7 +438,7 @@ Output ONLY valid JSON in this format:
 		}
 		respBuilder.WriteString(t.Text)
 	}
-	resp := respBuilder.String()
+	resp := extractJSON(respBuilder.String())
 
 	// Ensure it parses
 	var parsed map[string]interface{}

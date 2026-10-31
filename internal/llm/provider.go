@@ -28,6 +28,8 @@ type Request struct {
 	// ResponseFormat hints to the provider to return structured output.
 	// "json" requests JSON-object output where supported; empty means free-form.
 	ResponseFormat string
+	// Model, when non-empty, overrides the provider's workload-tier default model.
+	Model string
 }
 
 // Message is a single turn in the conversation.

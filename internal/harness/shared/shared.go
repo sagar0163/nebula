@@ -146,10 +146,12 @@ type ModelConfig struct {
 // ModelRouting maps phases to model configs
 type ModelRouting map[Phase]ModelConfig
 
-// DefaultModelRouting provides sensible defaults
+// DefaultModelRouting provides sensible defaults using NVIDIA (primary) with Groq fallback.
+// These map to providers registered in buildRouter() via the NEBULA_NVIDIA_KEY / NEBULA_GROQ_KEY env vars
+// or OS keyring entries — never hardcoded here.
 var DefaultModelRouting = ModelRouting{
-	PhasePlanning:    {Provider: "anthropic", Model: "claude-3-5-sonnet", Temperature: 0.1, MaxTokens: 4000},
-	PhaseExecution:   {Provider: "anthropic", Model: "claude-3-5-sonnet", Temperature: 0.1, MaxTokens: 8000},
-	PhaseVerification: {Provider: "openai", Model: "gpt-4o-mini", Temperature: 0.0, MaxTokens: 2000},
-	PhaseCritique:    {Provider: "anthropic", Model: "claude-3-5-sonnet", Temperature: 0.1, MaxTokens: 4000},
+	PhasePlanning:     {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.1, MaxTokens: 4000},
+	PhaseExecution:    {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.1, MaxTokens: 8000},
+	PhaseVerification: {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.0, MaxTokens: 2000},
+	PhaseCritique:     {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.1, MaxTokens: 4000},
 }

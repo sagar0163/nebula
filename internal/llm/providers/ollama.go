@@ -106,6 +106,9 @@ func (p *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 }
 
 func (p *OllamaProvider) selectModel(req llm.Request) string {
+	if req.Model != "" {
+		return req.Model
+	}
 	switch req.Workload {
 	case llm.WorkloadDiagnose:
 		if p.cfg.ModelDiagnose != "" {

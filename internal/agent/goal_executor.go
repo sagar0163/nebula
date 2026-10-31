@@ -15,6 +15,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 	tr.Register(&tools.ShellTool{})
 	tr.Register(&tools.ReadFileTool{})
 	tr.Register(&tools.WriteFileTool{})
+	tr.Register(&tools.StrReplaceTool{})
 	tr.Register(&tools.GrepTool{})
 	tr.Register(&tools.GitTool{})
 	tr.Register(&tools.DoneTool{})
@@ -37,7 +38,9 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 			return nil
 		}
 
-		for _, step := range steps {
+		// Execute only ONE step per iteration so the model can react to its result.
+		{
+			step := steps[0]
 			fmt.Fprintf(out, "Executing %s...\n", step.Tool)
 
 			var outStr string
@@ -67,10 +70,11 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 				outStr += fmt.Sprintf("\nError: %v", toolErr)
 			}
 
-			// Add to context
-			contextData += fmt.Sprintf("\nStep: %s\nResult:\n%s\n", step.Tool, outStr)
+			// Feed result back for the next planning call
+			contextData += fmt.Sprintf("\nStep %d: %s %v\nResult:\n%s\n", i+1, step.Tool, step.Input, outStr)
 		}
 	}
 
+	fmt.Fprintln(out, "Reached iteration limit (15) without DoneTool.")
 	return nil
 }

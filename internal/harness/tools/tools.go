@@ -556,6 +556,7 @@ func NewDefaultRegistry() *Registry {
 	r.Register(&ShellTool{})
 	r.Register(&ReadFileTool{})
 	r.Register(&WriteFileTool{})
+	r.Register(&StrReplaceTool{})
 	r.Register(&SearchCodeTool{})
 	r.Register(&GoToDefinitionTool{})
 	r.Register(&SemanticSearchTool{})
@@ -563,4 +564,52 @@ func NewDefaultRegistry() *Registry {
 	r.Register(&GitTool{})
 	r.Register(&RunTestsTool{})
 	return r
+}
+// StrReplaceTool performs a surgical find-and-replace of a unique string in a file.
+type StrReplaceTool struct{}
+
+func (t *StrReplaceTool) Name() string { return "str_replace" }
+func (t *StrReplaceTool) Description() string {
+	return "Replace an exact, unique occurrence of old_string with new_string in a file"
+}
+func (t *StrReplaceTool) Parameters() map[string]ParameterDef {
+	return map[string]ParameterDef{
+		"path":       {Type: "string", Description: "Path to the file", Required: true},
+		"old_string": {Type: "string", Description: "Exact text to find (must be unique in the file)", Required: true},
+		"new_string": {Type: "string", Description: "Replacement text", Required: true},
+	}
+}
+
+func (t *StrReplaceTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	path, _ := args["path"].(string)
+	if path == "" {
+		return nil, fmt.Errorf("missing required argument: path")
+	}
+	oldStr, _ := args["old_string"].(string)
+	if oldStr == "" {
+		return nil, fmt.Errorf("missing required argument: old_string")
+	}
+	newStr, ok := args["new_string"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing required argument: new_string")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	content := string(data)
+	if n := strings.Count(content, oldStr); n != 1 {
+		if n == 0 {
+			return nil, fmt.Errorf("old_string not found in %s", path)
+		}
+		return nil, fmt.Errorf("old_string appears %d times in %s; it must be unique", n, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(content, oldStr, newStr, 1)), info.Mode().Perm()); err != nil {
+		return nil, err
+	}
+	return fmt.Sprintf("Replaced 1 occurrence in %s", path), nil
 }

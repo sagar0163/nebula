@@ -453,3 +453,46 @@ func (r *Router) ContextWindow(ctx context.Context, w Workload) int {
 
 	return 4_096
 }
+
+// ModelConfig pins a request to a specific provider (and, informationally,
+// model) instead of the workload-based fan-out.
+type ModelConfig struct {
+	Provider string
+	Model    string
+}
+
+// providerByName returns the first registered, available provider whose Name
+// matches name, searching every workload chain.
+func (r *Router) providerByName(ctx context.Context, name string) Provider {
+	if name == "" {
+		return nil
+	}
+	for _, chain := range r.providers {
+		for _, p := range chain {
+			if strings.EqualFold(p.Name(), name) && p.Available(ctx) {
+				return p
+			}
+		}
+	}
+	return nil
+}
+
+// CompleteWithConfig sends the request directly to config.Provider, bypassing
+// the workload fan-out. If that provider is not registered/available, or it
+// fails, it falls back to Complete.
+func (r *Router) CompleteWithConfig(ctx context.Context, config ModelConfig, w Workload, req Request) (<-chan Token, error) {
+	p := r.providerByName(ctx, config.Provider)
+	if p == nil {
+		return r.Complete(ctx, w, req)
+	}
+	pinned := req
+	pinned.Model = config.Model
+	ch, err := r.sequential(ctx, w, pinned, []Provider{p}, routingConfig())
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return r.Complete(ctx, w, req)
+	}
+	return ch, nil
+}

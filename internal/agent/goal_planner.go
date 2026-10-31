@@ -31,23 +31,23 @@ Context:
 Available tools:
 %s
 
-Return ONLY a JSON object with this exact structure:
+Decide the SINGLE next step to take, based on the context so far (results of previous steps are included above).
+Return ONLY a JSON object with this exact structure, containing exactly one step:
 {
   "steps": [
-    {"tool": "ShellTool", "input": {"command": "actual shell command here"}},
-    {"tool": "DoneTool", "input": {"reason": "what was accomplished"}}
+    {"tool": "ReadFileTool", "input": {"path": "path/to/file"}}
   ]
 }
 
-Each step's "input" must be an object with string keys and string values.
-For ShellTool, the input must have a "command" field with the actual command to run.
-For DoneTool, the input must have a "reason" field explaining what was accomplished.
+Each step's "input" must be an object with string keys and string values matching the tool's parameters.
+Prefer StrReplaceTool for edits (old_string must match the file exactly and be unique) instead of rewriting whole files.
+Only use DoneTool (input: {"reason": "..."}) once the goal is genuinely accomplished and verified - never as the first step.
 
 Do not include any explanation, markdown, or text outside the JSON.`, goal, contextData, p.tools.FormatPrompt())
 
 	req := llm.Request{
 		Messages:       []llm.Message{{Role: "user", Content: prompt}},
-		MaxTokens:      1024,
+		MaxTokens:      4096,
 		Temperature:    0.1,
 		ResponseFormat: "json",
 	}

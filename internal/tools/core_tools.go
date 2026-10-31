@@ -118,3 +118,54 @@ func (t *DoneTool) Execute(ctx context.Context, input map[string]string) (string
 	}
 	return fmt.Sprintf("DONE: %s", reason), nil
 }
+
+// StrReplaceTool performs a surgical find-and-replace of a unique string in a file.
+type StrReplaceTool struct{}
+
+func (t *StrReplaceTool) Name() string { return "StrReplaceTool" }
+func (t *StrReplaceTool) Description() string {
+	return "Replaces an exact, unique occurrence of old_string with new_string in a file. Prefer this over rewriting whole files."
+}
+func (t *StrReplaceTool) Parameters() map[string]string {
+	return map[string]string{
+		"path":       "The path to the file",
+		"old_string": "Exact text to find (must appear exactly once in the file)",
+		"new_string": "Replacement text",
+	}
+}
+func (t *StrReplaceTool) Execute(ctx context.Context, input map[string]string) (string, error) {
+	path := input["path"]
+	if path == "" {
+		return "", fmt.Errorf("missing path")
+	}
+	oldStr, ok := input["old_string"]
+	if !ok || oldStr == "" {
+		return "", fmt.Errorf("missing old_string")
+	}
+	newStr := input["new_string"]
+	return StrReplaceInFile(path, oldStr, newStr)
+}
+
+// StrReplaceInFile replaces the single occurrence of oldStr with newStr in path.
+func StrReplaceInFile(path, oldStr, newStr string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+	switch n := strings.Count(content, oldStr); n {
+	case 0:
+		return "", fmt.Errorf("old_string not found in %s", path)
+	case 1:
+	default:
+		return "", fmt.Errorf("old_string appears %d times in %s; it must be unique (add more surrounding context)", n, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(content, oldStr, newStr, 1)), info.Mode().Perm()); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Replaced 1 occurrence in %s", path), nil
+}

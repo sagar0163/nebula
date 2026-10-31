@@ -3,21 +3,19 @@ package swebench
 
 import (
 	"context"
-	"sync"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/sagar0163/nebula/internal/agent"
+	"github.com/sagar0163/nebula/internal/harness"
+	"github.com/sagar0163/nebula/internal/harness/shared"
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/llm/providers"
-	"github.com/sagar0163/nebula/internal/memory"
-	"github.com/sagar0163/nebula/internal/pty"
-	"github.com/sagar0163/nebula/internal/safety"
 	"github.com/sagar0163/nebula/internal/swebench/testrunner"
 	"github.com/spf13/viper"
 	"github.com/zalando/go-keyring"
@@ -26,22 +24,22 @@ import (
 
 // OfficialPrediction matches the SWE-bench harness prediction format.
 type OfficialPrediction struct {
-	InstanceID string `json:"instance_id"`
-	ModelName  string `json:"model_name_or_path"`
-	ModelPatch string `json:"model_patch"`
+	InstanceID  string `json:"instance_id"`
+	ModelName   string `json:"model_name_or_path"`
+	ModelPatch  string `json:"model_patch"`
 	GeneratedAt string `json:"generated_at"`
 }
 
 // RunnerConfig controls a SWE-bench evaluation run.
 type RunnerConfig struct {
-	Dataset       DatasetConfig
-	Provider      string        // LLM provider to use (nvidia, groq, etc.)
-	Model         string        // Specific model name
-	Timeout       time.Duration // Per-instance timeout
-	OutputDir     string        // Where to write predictions.jsonl and results
-	Concurrency   int           // Parallel instances (default 1 for safety)
-	SkipResolved  bool          // Skip instances already in predictions file
-	DryRun        bool          // Don't actually run, just show what would run
+	Dataset      DatasetConfig
+	Provider     string        // LLM provider to use (nvidia, groq, etc.)
+	Model        string        // Specific model name
+	Timeout      time.Duration // Per-instance timeout
+	OutputDir    string        // Where to write predictions.jsonl and results
+	Concurrency  int           // Parallel instances (default 1 for safety)
+	SkipResolved bool          // Skip instances already in predictions file
+	DryRun       bool          // Don't actually run, just show what would run
 }
 
 // Runner executes SWE-bench instances through Nebula agent.
@@ -86,7 +84,6 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 
 // Run executes the SWE-bench evaluation.
 
-
 func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	instances, err := LoadDataset(r.cfg.Dataset)
 	if err != nil {
@@ -95,18 +92,21 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 
 	// Load existing predictions to resume
 	existing := r.loadPredictions()
-	
+
 	r.results = make([]*Result, 0, len(instances))
-	
+
 	concurrency := r.cfg.Concurrency
 	if concurrency < 1 {
 		concurrency = 1
 	}
 
 	// Create a worker pool
-	workQueue := make(chan struct{ index int; inst *Instance }, len(instances))
+	workQueue := make(chan struct {
+		index int
+		inst  *Instance
+	}, len(instances))
 	resultsQueue := make(chan *Result, len(instances))
-	
+
 	// Enqueue work
 	totalCount := 0
 	for i, inst := range instances {
@@ -114,15 +114,18 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 		if r.cfg.SkipResolved && existing[inst.InstanceID] != "" {
 			continue
 		}
-		workQueue <- struct{ index int; inst *Instance }{i, inst}
+		workQueue <- struct {
+			index int
+			inst  *Instance
+		}{i, inst}
 		totalCount++
 	}
 	close(workQueue)
-	
+
 	if totalCount == 0 {
 		return r.finalize(), nil
 	}
-	
+
 	var wg sync.WaitGroup
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
@@ -134,34 +137,34 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 					return
 				default:
 				}
-				
+
 				fmt.Printf("\n[%d/%d] Starting %s\n", work.index+1, len(instances), work.inst.InstanceID)
 				result := r.runInstance(ctx, work.inst)
-				
+
 				status := result.Status
 				if result.Error != "" {
 					status += " (" + result.Error + ")"
 				}
 				fmt.Printf("  → %s: %s (%v)\n", work.inst.InstanceID, status, result.Duration.Round(time.Second))
-				
+
 				resultsQueue <- result
 			}
 		}()
 	}
-	
+
 	// Collect results in a separate goroutine
 	go func() {
 		wg.Wait()
 		close(resultsQueue)
 	}()
-	
+
 	for res := range resultsQueue {
 		r.results = append(r.results, res)
 		if err := r.writeOfficialPrediction(res); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: write prediction: %v\n", err)
 		}
 	}
-	
+
 	return r.finalize(), nil
 }
 
@@ -195,58 +198,42 @@ func (r *Runner) runInstance(ctx context.Context, inst *Instance) *Result {
 	// Build the goal for Nebula
 	goal := r.buildGoal(inst)
 
-	// Create agent with isolated memory store
-	dbPath := filepath.Join(workDir, "nebula.db")
-	store, err := memory.New(dbPath)
+	// Run through the full harness (planner -> executor -> verifier -> critic)
+	// instead of calling agent.DoGoal directly, so retry feedback, the
+	// verifier, test patch application and failing-test filtering all apply.
+	orch := harness.NewOrchestrator(r.router, shared.DefaultModelRouting, nil)
+
+	// Wire in the SWE-bench specific context
+	orch.SetTestContext(parseTestList(inst.FAILTOPASS), inst.TestPatch)
+
+	runCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
+	defer cancel()
+
+	// Some tools still resolve relative paths against the process cwd.
+	prevDir, err := os.Getwd()
 	if err != nil {
 		result.Status = "error"
-		result.Error = fmt.Sprintf("create store: %v", err)
+		result.Error = fmt.Sprintf("getwd failed: %v", err)
 		result.Duration = time.Since(start)
 		return result
 	}
-	defer store.Close()
-
-	harness := pty.NewHarness(256*1024, 512*1024)
-	a := agent.New(harness, r.router, store, agent.Config{
-		HistoryDepth:  10,
-		FileInjection: true,
-	})
-
-	// Run with a context timeout
-			runCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
-			defer cancel()
-
-			// Change to workDir for the agent to operate in the correct directory
-					prevDir, err := os.Getwd()
-					if err != nil {
-						result.Status = "error"
-						result.Error = fmt.Sprintf("getwd failed: %v", err)
-						result.Duration = time.Since(start)
-						return result
-					}
-					fmt.Printf("DEBUG: Changing to workDir: %s\n", workDir)
-					if err := os.Chdir(workDir); err != nil {
-						result.Status = "error"
-						result.Error = fmt.Sprintf("chdir failed: %v", err)
-						result.Duration = time.Since(start)
-						return result
-					}
-					fmt.Printf("DEBUG: Goal being sent:\n%s\n", goal)
-
-					// Use DoGoal to have Nebula work on the issue
-					var sb strings.Builder
-					err = a.DoGoal(runCtx, goal, agent.RunOptions{
-						SkipPermissions: true,
-						ApprovalFn: func(cmd string, risk safety.Risk) bool { return true },
-					}, &sb)
-
-					// Restore original directory
-					os.Chdir(prevDir)
-
-					if err != nil {
-						fmt.Printf("DEBUG: Agent error: %v\n", err)
+	if err := os.Chdir(workDir); err != nil {
 		result.Status = "error"
-		result.Error = fmt.Sprintf("agent error: %v", err)
+		result.Error = fmt.Sprintf("chdir failed: %v", err)
+		result.Duration = time.Since(start)
+		return result
+	}
+	fmt.Printf("DEBUG: Goal being sent:\n%s\n", goal)
+
+	traj, err := orch.Run(runCtx, goal, workDir)
+	os.Chdir(prevDir)
+	if traj != nil {
+		fmt.Printf("DEBUG: Harness finished with %d steps\n", len(traj.Steps))
+	}
+	if err != nil {
+		fmt.Printf("DEBUG: Harness error: %v\n", err)
+		result.Status = "error"
+		result.Error = fmt.Sprintf("harness error: %v", err)
 		result.Duration = time.Since(start)
 		return result
 	}
@@ -265,7 +252,7 @@ func (r *Runner) runInstance(ctx context.Context, inst *Instance) *Result {
 	if out, err := cmd.CombinedOutput(); err == nil {
 		fmt.Printf("DEBUG: Git diff before extractPatch: %s\n", string(out))
 	}
-	
+
 	patch := r.extractPatch(runCtx, workDir)
 	fmt.Printf("DEBUG: Extracted patch: %q\n", patch)
 	result.GeneratedPatch = patch
@@ -302,19 +289,9 @@ func (r *Runner) buildGoal(inst *Instance) string {
 	if inst.HintsText != "" {
 		b.WriteString("\nHints: " + inst.HintsText + "\n")
 	}
-	b.WriteString("\nYou MUST return ONLY a JSON object with this exact structure:\n")
-	b.WriteString("{\n")
-	b.WriteString("  \"steps\": [\n")
-	b.WriteString("    {\"tool\": \"ShellTool\", \"input\": {\"command\": \"ls -la\"}},\n")
-	b.WriteString("    {\"tool\": \"ShellTool\", \"input\": {\"command\": \"find . -name '*.py' -o -name '*.go' -o -name '*.js' | head -20\"}},\n")
-	b.WriteString("    {\"tool\": \"ShellTool\", \"input\": {\"command\": \"cat path/to/buggy/file.py\"}},\n")
-	b.WriteString("    {\"tool\": \"ShellTool\", \"input\": {\"command\": \"sed -i 's/BUGGY_CODE/FIXED_CODE/g' path/to/file.py\"}},\n")
-	b.WriteString("    {\"tool\": \"DoneTool\", \"input\": {\"reason\": \"unified diff patch here\"}}\n")
-	b.WriteString("  ]\n")
-	b.WriteString("}\n\n")
-	b.WriteString("Do NOT include any explanation, markdown, or text outside the JSON.\n")
-	b.WriteString("Replace the example commands with actual commands for this repository.\n")
-	b.WriteString("Use ShellTool to explore, read files, make edits, then use DoneTool with the unified diff as reason.\n")
+	b.WriteString("\nWork one step at a time: explore with ShellTool/GrepTool, read files with ReadFileTool, ")
+	b.WriteString("make surgical edits with StrReplaceTool, and verify your change. ")
+	b.WriteString("Only call DoneTool after you have actually edited the code and verified the fix.\n")
 	return b.String()
 }
 
@@ -339,7 +316,7 @@ func (r *Runner) extractPatch(ctx context.Context, workDir string) string {
 // applyPatchAndTest applies the generated patch and runs the test suite with retry logic.
 func (r *Runner) applyPatchAndTest(ctx context.Context, workDir string, inst *Instance, patch string) error {
 	maxRetries := 3
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Write patch to file
 		patchFile := filepath.Join(workDir, "fix.patch")
@@ -384,7 +361,7 @@ func (r *Runner) applyPatchAndTest(ctx context.Context, workDir string, inst *In
 			return fmt.Errorf("tests still failing after %d attempts: %d failed", maxRetries, testResult.Failed)
 		}
 	}
-	
+
 	return fmt.Errorf("max retries exceeded")
 }
 
@@ -395,7 +372,7 @@ func (r *Runner) runTests(ctx context.Context, workDir string) (*testrunner.Test
 	if goRunner.Detect(workDir) {
 		return goRunner.RunTests(ctx, workDir, "")
 	}
-	
+
 	// Fallback to generic test commands
 	testCmds := [][]string{
 		{"python", "-m", "pytest", "-x", "-v"},
@@ -472,9 +449,9 @@ func (r *Runner) copyLocalRepo(ctx context.Context, workDir, localPath, commit s
 // writeOfficialPrediction writes a prediction in the official SWE-bench format.
 func (r *Runner) writeOfficialPrediction(result *Result) error {
 	pred := OfficialPrediction{
-		InstanceID: result.InstanceID,
-		ModelName:  result.Model,
-		ModelPatch: result.GeneratedPatch,
+		InstanceID:  result.InstanceID,
+		ModelName:   result.Model,
+		ModelPatch:  result.GeneratedPatch,
 		GeneratedAt: time.Now().Format(time.RFC3339),
 	}
 	f, err := os.OpenFile(r.predPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -731,4 +708,18 @@ func loadKeys(baseKey, configVal, envVar string) []string {
 	}
 
 	return keys
+}
+
+// parseTestList decodes a SWE-bench FAIL_TO_PASS / PASS_TO_PASS field, which is
+// a JSON-encoded list of test identifiers stored as a string.
+func parseTestList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var tests []string
+	if err := json.Unmarshal([]byte(raw), &tests); err == nil {
+		return tests
+	}
+	return []string{raw}
 }

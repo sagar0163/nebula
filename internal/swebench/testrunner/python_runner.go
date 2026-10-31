@@ -38,17 +38,39 @@ func (r *PythonTestRunner) Detect(workDir string) bool {
 func (r *PythonTestRunner) GetTestCommand(filter string) []string {
 	// Simple invocation, ignoring conda env for now unless injected externally
 	cmd := []string{"python", "-m", "pytest", "-x", "--tb=short", "-q"}
-	if filter != "" {
-		cmd = append(cmd, filter)
-	}
+	// Each test id is a separate argument (a single space-joined arg would be
+	// treated by pytest as one nonexistent path).
+	cmd = append(cmd, strings.Fields(filter)...)
 	return cmd
+}
+
+// condaRoot is the miniconda install used by SWE-bench containers.
+const condaRoot = "/opt/miniconda3"
+
+// shellQuote single-quotes s for bash.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// wrapConda runs args inside the conda "testbed" env when available.
+func wrapConda(workDir string, args []string) []string {
+	if _, err := os.Stat(condaRoot); err != nil {
+		return args
+	}
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = shellQuote(a)
+	}
+	script := "source " + condaRoot + "/etc/profile.d/conda.sh && conda activate testbed && cd " +
+		shellQuote(workDir) + " && " + strings.Join(quoted, " ")
+	return []string{"bash", "-c", script}
 }
 
 // RunTests executes the python tests
 func (r *PythonTestRunner) RunTests(ctx context.Context, workDir string, filter string) (*TestResult, error) {
 	start := time.Now()
 	
-	args := r.GetTestCommand(filter)
+	args := wrapConda(workDir, r.GetTestCommand(filter))
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = workDir
 	

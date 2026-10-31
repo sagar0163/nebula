@@ -12,7 +12,7 @@ import (
 	"github.com/sagar0163/nebula/internal/profile"
 )
 
-const maxGoalIterations = 25
+const maxGoalIterations = 40
 
 // summarizeArgs renders tool args compactly for logs so edits are visible.
 func summarizeArgs(in map[string]interface{}) string {
@@ -128,8 +128,8 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 
 			// Feed result back for the next planning call
 			output := outStr
-			if len(output) > 3000 {
-				output = output[:3000] + "\n... (truncated)"
+			if len(output) > 8000 {
+				output = output[:8000] + "\n... (truncated)"
 			}
 			contextData += fmt.Sprintf("\nStep %d: %s %v\nResult (%s):\n%s\n", i+1, step.Tool, step.Input, step.Tool, output)
 		}

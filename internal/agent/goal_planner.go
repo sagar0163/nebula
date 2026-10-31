@@ -24,8 +24,8 @@ func NewGoalPlanner(router *llm.Router, tr *tools.Registry) *GoalPlanner {
 
 func (p *GoalPlanner) Plan(ctx context.Context, goal string, contextData string, user profile.UserProfile, proj profile.ProjectProfile) ([]models.GoalStep, error) {
 	// Keep the most recent context; small-context providers reject huge prompts (413).
-	if len(contextData) > 8000 {
-		contextData = "...(earlier context truncated)...\n" + contextData[len(contextData)-8000:]
+	if len(contextData) > 32000 {
+		contextData = "...(earlier context truncated)...\n" + contextData[len(contextData)-32000:]
 	}
 	prompt := fmt.Sprintf(`Goal: %s
 
@@ -47,7 +47,7 @@ Your response must END with a JSON object with this exact structure, containing 
 Each step's "input" must be an object with string keys and string values matching the tool's parameters.
 HOW TO FIX A BUG:
 1. Locate the relevant file (GrepTool or ShellTool with grep/find).
-2. ALWAYS call ReadFileTool on the file first so you see the exact current code (indentation included). Tool results are truncated to ~3000 chars, so for large files first find the line with "grep -n" (ShellTool) and then pass "start_line"/"end_line" to ReadFileTool to read ~60 lines around it.
+2. ALWAYS call ReadFileTool on the file first so you see the exact current code (indentation included). Tool results are truncated to ~8000 chars, so for large files first find the line with "grep -n" (ShellTool) and then pass "start_line"/"end_line" to ReadFileTool to read ~60 lines around it.
 3. Apply the fix with StrReplaceTool using exactly these input keys:
    - "path": the file path
    - "old_string": the exact current code to replace, copied verbatim from the ReadFileTool output (no line numbers), and unique in the file (include surrounding lines if needed)
@@ -140,12 +140,23 @@ func extractJSON(text string) string {
 		return text
 	}
 	
-	// Try to find JSON object in text (between first { and last })
-	start := strings.Index(text, "{")
+	// Prefer the LAST valid JSON object: reasoning text may contain braces.
 	end := strings.LastIndex(text, "}")
+	for end >= 0 {
+		for start := strings.LastIndex(text[:end], "{"); start >= 0; start = strings.LastIndex(text[:start], "{") {
+			if cand := text[start : end+1]; json.Valid([]byte(cand)) {
+				return cand
+			}
+		}
+		end = strings.LastIndex(text[:end], "}")
+	}
+
+	// Fallback: between first { and last }
+	start := strings.Index(text, "{")
+	end = strings.LastIndex(text, "}")
 	if start >= 0 && end > start {
 		return text[start : end+1]
 	}
-	
+
 	return ""
 }

@@ -371,8 +371,8 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 				trace = "(verifier returned no error trace) raw verifier output: " + verifyOutput.Context
 			}
 			// pytest puts the useful summary (assertion/traceback) at the end; keep the tail.
-			if len(trace) > 4000 {
-				trace = "...(truncated)...\n" + trace[len(trace)-4000:]
+			if len(trace) > 8000 {
+				trace = "...(truncated)...\n" + trace[len(trace)-8000:]
 			}
 			fmt.Printf(">> Error trace (%d chars):\n%s\n", len(trace), trace)
 			fmt.Printf(">> Tests failed on attempt %d. Feeding error trace back to Executor.\n", attempt)
@@ -512,49 +512,62 @@ func extractFailingTests(issue string) []string {
 }
 
 func (o *Orchestrator) buildRepoSummary(workDir string) string {
-	// Use pure Go filepath.WalkDir instead of heavy exec.Command("find") fork
+	const maxDepth = 5
+	const maxChars = 4000
 	var dirsBuilder strings.Builder
+	truncated := false
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return filepath.SkipDir
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		// Skip hidden dirs
-		if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
-			return filepath.SkipDir
-		}
-		
-		rel, err := filepath.Rel(workDir, path)
-		if err == nil {
-			depth := strings.Count(rel, string(os.PathSeparator))
-			if depth <= 3 {
-				if dirsBuilder.Len() > 0 {
-					dirsBuilder.WriteString("\n")
-				}
-				if rel == "." {
-					dirsBuilder.WriteString(".")
-				} else {
-					dirsBuilder.WriteString("./" + rel)
-				}
-				if dirsBuilder.Len() > 1000 {
-					return filepath.SkipAll // Early exit when truncated
-				}
-			} else {
+			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}
+			return nil
 		}
+		name := d.Name()
+		if path != workDir && (strings.HasPrefix(name, ".") || name == "__pycache__" || name == "node_modules") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(workDir, path)
+		if err != nil {
+			return nil
+		}
+		depth := strings.Count(rel, string(os.PathSeparator))
+		if d.IsDir() && depth > maxDepth {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && (depth > maxDepth || !isSourceFile(name)) {
+			return nil
+		}
+		line := "./" + rel
+		if rel == "." {
+			line = "."
+		}
+		if d.IsDir() {
+			line += "/"
+		} else if info, ierr := d.Info(); ierr == nil {
+			line += fmt.Sprintf(" (%d B)", info.Size())
+		}
+		if dirsBuilder.Len()+len(line)+1 > maxChars {
+			truncated = true
+			return filepath.SkipAll
+		}
+		if dirsBuilder.Len() > 0 {
+			dirsBuilder.WriteString("\n")
+		}
+		dirsBuilder.WriteString(line)
 		return nil
 	})
-	
+
 	dirs := dirsBuilder.String()
 	if dirs == "" {
 		dirs = "<unable to list directories>"
-	} else if len(dirs) >= 1000 {
+	} else if truncated {
 		dirs += "\n... (truncated)"
 	}
-	
+
 	// Detect basic languages by checking root files
 	langs := ""
 	if _, err := exec.Command("ls", filepath.Join(workDir, "package.json")).Output(); err == nil {
@@ -567,8 +580,17 @@ func (o *Orchestrator) buildRepoSummary(workDir string) string {
 		langs += "Go detected. "
 	}
 
-	return fmt.Sprintf("Repository at %s\nPrimary languages/frameworks: %s\nDirectory Structure (depth 3):\n%s", workDir, langs, dirs)
+	return fmt.Sprintf("Repository at %s\nPrimary languages/frameworks: %s\nDirectory Structure (depth 5, source files with sizes):\n%s", workDir, langs, dirs)
 }
+// isSourceFile reports whether name looks like a source/config file worth listing.
+func isSourceFile(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".py", ".go", ".js", ".ts", ".java", ".rs", ".c", ".h", ".cpp", ".rb", ".pyx", ".cfg", ".toml":
+		return true
+	}
+	return false
+}
+
 // deleteTrajectory removes the persisted trajectory for workDir.
 func deleteTrajectory(workDir string) error {
 	err := os.Remove(filepath.Join(workDir, ".nebula", "trajectory.json"))

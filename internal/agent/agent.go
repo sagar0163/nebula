@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/sagar0163/nebula/internal/harness/shared"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -331,6 +332,9 @@ type RunOptions struct {
 	// run the failing tests itself and iterate on its fix.
 	TestCmd      string
 	FailingTests []string
+	// ModelConfig, when set, pins every DoGoal LLM call to this provider/model
+	// via CompleteWithConfig instead of racing all providers (issue #39).
+	ModelConfig *shared.ModelConfig
 }
 
 

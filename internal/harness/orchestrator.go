@@ -37,6 +37,11 @@ type Orchestrator struct {
 	stepTimeout time.Duration
 	MultiModel bool
 
+	// instanceTimeout bounds the whole Run; executor attempts are sized to fit
+	// inside it (issue #44).
+	instanceTimeout time.Duration
+	runStart        time.Time
+
 	// issue is the original issue/goal text, kept so the executor can run the
 	// real goal instead of only the plan summary.
 	issue string
@@ -68,6 +73,7 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 		toolRegistry:  tools.NewDefaultRegistry(),
 		maxSteps:      20,
 		stepTimeout:   5 * time.Minute,
+		instanceTimeout: 25 * time.Minute,
 	}
 	
 	// Initialize agents with appropriate models
@@ -94,6 +100,7 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 // Run executes the full harness pipeline on an issue
 func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*shared.Trajectory, error) {
 	o.issue = issue
+	o.runStart = time.Now()
 	traj, err := loadTrajectory(workDir)
 	if err != nil {
 		fmt.Printf("Warning: failed to load existing trajectory: %v\n", err)
@@ -118,7 +125,9 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			Status:     "running",
 		}
 	} else {
-		fmt.Printf("Resuming existing trajectory with %d steps\n", len(traj.Steps))
+		// NOTE (issue #45): this is not a true resume. Planning and execution are
+		// re-run from scratch; only the stored step history is carried forward.
+		fmt.Printf("Re-running from stored trajectory context (not a true resume): %d prior steps\n", len(traj.Steps))
 	}
 
 	// Apply the test patch so the failing tests exist; revert it on exit.
@@ -158,9 +167,12 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	}
 	
 	// Localization hints: traceback frames and symbols from the issue text.
+	// Kept in locHints so the executor goal gets them too (issue #38).
+	locHints := ""
 	if hints := localize.Hints(o.issue); hints != "" {
 		fmt.Print(hints)
-		issue += "\n\n[LOCALIZATION HINTS]\n" + hints
+		locHints = "\n\n[LOCALIZATION HINTS]\n" + hints
+		issue += locHints
 	}
 
 	planCtx := o.buildPlanningContext(issue, workDir)
@@ -211,10 +223,25 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		fmt.Printf("Executor test command: %s\n", testCmd)
 	}
 	o.executor.ResetSession()
-	
-	for attempt := 1; attempt <= 3; attempt++ {
+
+	// Size each attempt so all attempts fit in the instance budget (issue #44).
+	const maxAttempts = 3
+	instanceTimeout := o.instanceTimeout
+	if instanceTimeout <= 0 {
+		instanceTimeout = 25 * time.Minute
+	}
+	instanceDeadline := o.runStart.Add(instanceTimeout)
+	reserved := 2 * time.Minute // planning + verification + critique
+	perAttempt := (time.Until(instanceDeadline) - reserved) / time.Duration(maxAttempts)
+	if perAttempt < 2*time.Minute {
+		perAttempt = 2 * time.Minute
+	}
+	fmt.Printf("Executor per-attempt timeout: %s\n", perAttempt)
+	criticRejected := false
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
-		goal := o.issue + "\n\nPlanning context:\n" + execContextStr
+		goal := o.issue + locHints + "\n\nPlanning context:\n" + execContextStr
 		resume := false
 		if attempt > 1 {
 			trimmed := strings.TrimSpace(prevPatch)
@@ -227,7 +254,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 						fmt.Printf("Warning: failed to re-apply test patch: %v\n", err)
 					}
 				}
-				goal = o.issue + "\n\nPrevious attempt made no changes. Start fresh and find the right file to fix.\n" + execContextStr
+				goal = o.issue + locHints + "\n\nPrevious attempt made no changes. Start fresh and find the right file to fix.\n" + execContextStr
 				o.executor.ResetSession()
 			} else if ls := o.executor.LastSession(); ls != nil && len(ls.Messages) > 1 && !o.MultiModel {
 				// Resume the same conversation so the model remembers why it
@@ -239,7 +266,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			} else {
 				// Previous attempt made changes that didn't pass: keep them and refine.
 				fmt.Println("Keeping previous attempt's changes; asking executor to refine them.")
-				goal = o.issue + "\n\nPrevious attempt made changes but tests still fail. Current diff:\n" + prevPatch +
+				goal = o.issue + locHints + "\n\nPrevious attempt made changes but tests still fail. Current diff:\n" + prevPatch +
 					"\n\n" + execContextStr +
 					"\nDo NOT undo the previous changes. Review them and make additional fixes if needed, or correct them."
 			}
@@ -251,6 +278,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			"testCmd":      testCmd,
 			"failingTests": o.failingTests,
 			"resume":       resume,
+			"timeout":      perAttempt,
 		}
 		
 		execStart := time.Now()
@@ -376,6 +404,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 				if approved, ok := criticRes["approved"].(bool); ok && !approved {
 					fmt.Println(">> Critic rejected the patch due to security or destructive changes.")
 					resolved = false
+					criticRejected = true
 					execContextStr = fmt.Sprintf("Critic rejected your patch. Warnings:\n%v\nPlease fix.", criticRes["warnings"])
 					lastTrace = execContextStr
 					continue // Loop back to Executor
@@ -396,6 +425,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			resolved = true
 			break
 		} else {
+			criticRejected = false
 			trace, _ := verifyRes["error_trace"].(string)
 			if strings.TrimSpace(trace) == "" {
 				trace = "(verifier returned no error trace) raw verifier output: " + verifyOutput.Context
@@ -411,6 +441,14 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		}
 	}
 	
+	// Issue #43: if the last outcome was a Critic rejection and nothing was
+	// verified+approved, discard the rejected edits so they are not submitted.
+	if !resolved && criticRejected {
+		fmt.Println(">> Critic rejected the final patch; reverting working tree so it is not submitted.")
+		exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
+		exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
+	}
+
 	traj.EndTime = time.Now()
 	if resolved {
 		traj.Status = "resolved"

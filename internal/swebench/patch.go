@@ -19,10 +19,12 @@ type PatchResult struct {
 
 // GeneratePatch creates a validated unified diff from the working directory
 func GeneratePatch(ctx context.Context, workDir string) (*PatchResult, error) {
-	// 1. Get git diff
-	cmd := exec.CommandContext(ctx, "git", "diff", "--no-color")
-	cmd.Dir = workDir
-	out, err := cmd.CombinedOutput()
+	// 1. Get git diff. Stage everything (incl. new untracked files, issue #40)
+	// so the diff captures them, then unstage to leave the index untouched.
+	exec.CommandContext(ctx, "git", "-C", workDir, "add", "-A", "--", ".", ":(exclude).nebula").Run()
+	cmd := exec.CommandContext(ctx, "git", "-C", workDir, "diff", "--cached", "--no-color")
+	out, err := cmd.Output()
+	exec.CommandContext(ctx, "git", "-C", workDir, "reset", "-q").Run()
 	if err != nil {
 		return &PatchResult{Valid: false, Error: fmt.Sprintf("git diff failed: %v: %s", err, string(out))}, nil
 	}

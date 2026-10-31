@@ -148,7 +148,7 @@ func trimMessages(msgs []llm.Message, trigger, keep int) []llm.Message {
 // It returns the raw response text and the parsed step. On a parse failure
 // it returns the response with a non-nil error describing the problem, so
 // the caller can feed the error back into the conversation.
-func (a *Agent) nextStep(ctx context.Context, messages []llm.Message) (string, *models.GoalStep, error) {
+func (a *Agent) nextStep(ctx context.Context, messages []llm.Message, opts RunOptions) (string, *models.GoalStep, error) {
 	req := llm.Request{
 		Messages:    messages,
 		MaxTokens:   4096,
@@ -171,7 +171,13 @@ func (a *Agent) nextStep(ctx context.Context, messages []llm.Message) (string, *
 			}
 			backoff *= 2
 		}
-		tokens, err := a.router.Complete(ctx, llm.WorkloadDiagnose, req)
+		var tokens <-chan llm.Token
+		var err error
+		if opts.ModelConfig != nil && opts.ModelConfig.Provider != "" {
+			tokens, err = a.router.CompleteWithConfig(ctx, llm.ModelConfig{Provider: opts.ModelConfig.Provider, Model: opts.ModelConfig.Model}, llm.WorkloadDiagnose, req)
+		} else {
+			tokens, err = a.router.Complete(ctx, llm.WorkloadDiagnose, req)
+		}
 		if err != nil {
 			lastErr = err
 			continue
@@ -271,7 +277,7 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 		}
 		messages = trimMessages(messages, historyTrimTrigger, historyKeepChars)
 
-		resp, step, err := a.nextStep(ctx, messages)
+		resp, step, err := a.nextStep(ctx, messages, opts)
 		if step == nil {
 			if resp == "" {
 				return save(), err // transport failure

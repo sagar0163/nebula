@@ -190,7 +190,13 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 	// Run the goal executor in-process (issue #21: shelling out to `nebula do`
 	// re-entered the harness and recursed forever).
 	fmt.Printf("[Executor] Running DoGoal in %s\n", workDir)
-	runCtx, cancel := context.WithTimeout(ctx, 900*time.Second) // 40 steps with a growing conversation
+	// The orchestrator sizes the per-attempt budget to fit the instance
+	// timeout (issue #44); 900s is only the standalone fallback.
+	attemptTimeout := 900 * time.Second
+	if t, ok := input.Metadata["timeout"].(time.Duration); ok && t > 0 {
+		attemptTimeout = t
+	}
+	runCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 
 	// DoGoal's tools resolve relative paths against the process cwd, so
@@ -206,7 +212,9 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 		}
 	}
 
-	opts := agent.RunOptions{SkipPermissions: true}
+	// Route every executor LLM call through the execution-phase model (issue #39).
+	execModel := e.model
+	opts := agent.RunOptions{SkipPermissions: true, ModelConfig: &execModel}
 	if tc, ok := input.Metadata["testCmd"].(string); ok {
 		opts.TestCmd = tc
 	}

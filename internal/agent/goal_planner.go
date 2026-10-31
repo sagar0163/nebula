@@ -44,8 +44,19 @@ Return ONLY a JSON object with this exact structure, containing exactly one step
 }
 
 Each step's "input" must be an object with string keys and string values matching the tool's parameters.
-Prefer StrReplaceTool for edits (old_string must match the file exactly and be unique) instead of rewriting whole files.
-Only when the goal is genuinely accomplished and verified (never as the first step), output {"steps": [{"tool": "DoneTool", "input": {"reason": "..."}}]} in your JSON.
+HOW TO FIX A BUG:
+1. Locate the relevant file (GrepTool or ShellTool with grep/find).
+2. ALWAYS call ReadFileTool on the file first so you see the exact current code (indentation included). Tool results are truncated to ~3000 chars, so for large files first find the line with "grep -n" (ShellTool) and then pass "start_line"/"end_line" to ReadFileTool to read ~60 lines around it.
+3. Apply the fix with StrReplaceTool using exactly these input keys:
+   - "path": the file path
+   - "old_string": the exact current code to replace, copied verbatim from the ReadFileTool output (no line numbers), and unique in the file (include surrounding lines if needed)
+   - "new_string": the replacement code with correct indentation
+   Example:
+   {"steps": [{"tool": "StrReplaceTool", "input": {"path": "src/pkg/module.py", "old_string": "def is_valid(args):\n    return isinstance(args[0], Foo)", "new_string": "def is_valid(args):\n    if not args:\n        return False\n    return isinstance(args[0], Foo)"}}]}
+4. If StrReplaceTool returns an error (not found / not unique), ReadFileTool again and retry with a corrected old_string.
+5. Use WriteFileTool only for new files. Do not rewrite whole existing files.
+Do NOT modify test files; fix the source code so the failing tests pass. If an error trace is given, fix the exact line it points at.
+Call DoneTool ONLY after StrReplaceTool or WriteFileTool has successfully changed a file (never as the first step). Output {"steps": [{"tool": "DoneTool", "input": {"reason": "..."}}]} in your JSON.
 The "tool" field is just a string in your JSON reply - do not make native function/tool calls.
 
 Do not include any explanation, markdown, or text outside the JSON.`, goal, contextData, p.tools.FormatPrompt())

@@ -298,7 +298,10 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		
 		// Check if tests passed
 		var verifyRes map[string]interface{}
-		json.Unmarshal([]byte(verifyOutput.Context), &verifyRes)
+		if err := json.Unmarshal([]byte(verifyOutput.Context), &verifyRes); err != nil {
+			fmt.Printf("Warning: verifier output is not valid JSON (%v); using raw output as error trace\n", err)
+			verifyRes = map[string]interface{}{"passed": false, "error_trace": verifyOutput.Context}
+		}
 		
 		if passed, ok := verifyRes["passed"].(bool); ok && passed {
 			fmt.Println(">> Tests passed! Fix is verified.")
@@ -357,6 +360,14 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			break
 		} else {
 			trace, _ := verifyRes["error_trace"].(string)
+			if strings.TrimSpace(trace) == "" {
+				trace = "(verifier returned no error trace) raw verifier output: " + verifyOutput.Context
+			}
+			// pytest puts the useful summary (assertion/traceback) at the end; keep the tail.
+			if len(trace) > 4000 {
+				trace = "...(truncated)...\n" + trace[len(trace)-4000:]
+			}
+			fmt.Printf(">> Error trace (%d chars):\n%s\n", len(trace), trace)
 			fmt.Printf(">> Tests failed on attempt %d. Feeding error trace back to Executor.\n", attempt)
 			execContextStr = fmt.Sprintf("Previous patch failed tests. Error trace:\n%s\nPlease fix the errors.", trace)
 		}

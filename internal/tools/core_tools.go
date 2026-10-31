@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -28,9 +29,15 @@ func (t *ShellTool) Execute(ctx context.Context, input map[string]string) (strin
 type ReadFileTool struct{}
 
 func (t *ReadFileTool) Name() string { return "ReadFileTool" }
-func (t *ReadFileTool) Description() string { return "Reads the content of a file." }
+func (t *ReadFileTool) Description() string {
+	return "Reads a file. For large files pass start_line/end_line (1-based, inclusive) to read only that range; find line numbers first with GrepTool or `grep -n`."
+}
 func (t *ReadFileTool) Parameters() map[string]string {
-	return map[string]string{"path": "The path to the file"}
+	return map[string]string{
+		"path":       "The path to the file",
+		"start_line": "Optional first line to read (1-based)",
+		"end_line":   "Optional last line to read (inclusive)",
+	}
 }
 func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (string, error) {
 	path := input["path"]
@@ -38,7 +45,32 @@ func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (st
 		return "", fmt.Errorf("missing path")
 	}
 	content, err := os.ReadFile(path)
-	return string(content), err
+	if err != nil {
+		return "", err
+	}
+	if input["start_line"] == "" && input["end_line"] == "" {
+		return string(content), nil
+	}
+	lines := strings.Split(string(content), "\n")
+	start, end := 1, len(lines)
+	if v := input["start_line"]; v != "" {
+		if n, e := strconv.Atoi(strings.TrimSpace(v)); e == nil && n > 0 {
+			start = n
+		}
+	}
+	if v := input["end_line"]; v != "" {
+		if n, e := strconv.Atoi(strings.TrimSpace(v)); e == nil && n > 0 {
+			end = n
+		}
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start > end {
+		return "", fmt.Errorf("start_line %d is past end of file (%d lines)", start, len(lines))
+	}
+	// Raw text (no line-number prefixes) so it can be copied verbatim into StrReplaceTool old_string.
+	return fmt.Sprintf("[lines %d-%d of %d]\n%s", start, end, len(lines), strings.Join(lines[start-1:end], "\n")), nil
 }
 
 type WriteFileTool struct{}

@@ -5,10 +5,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/sagar0163/nebula/internal/tools"
 	"github.com/sagar0163/nebula/internal/profile"
 )
+
+const maxGoalIterations = 25
+
+// summarizeArgs renders tool args compactly for logs so edits are visible.
+func summarizeArgs(in map[string]string) string {
+	var b strings.Builder
+	for _, k := range []string{"path", "command", "pattern", "old_string", "new_string", "content", "reason"} {
+		v, ok := in[k]
+		if !ok {
+			continue
+		}
+		v = strings.ReplaceAll(v, "\n", "\\n")
+		if len(v) > 200 {
+			v = v[:200] + "..."
+		}
+		fmt.Fprintf(&b, " %s=%q", k, v)
+	}
+	return b.String()
+}
 
 func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io.Writer) error {
 	tr := tools.NewRegistry()
@@ -23,8 +43,9 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 	planner := NewGoalPlanner(a.router, tr)
 
 	contextData := "Started goal execution."
+	editsMade := 0
 
-	for i := 0; i < 15; i++ { // limit iterations to 15
+	for i := 0; i < maxGoalIterations; i++ {
 		dir, _ := os.Getwd()
 		userProf := profile.GetUserProfile()
 		projProf := profile.GetProjectProfile(dir)
@@ -41,13 +62,18 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 		// Execute only ONE step per iteration so the model can react to its result.
 		{
 			step := steps[0]
-			fmt.Fprintf(out, "Executing %s...\n", step.Tool)
+			fmt.Fprintf(out, "[step %d/%d] Executing %s:%s\n", i+1, maxGoalIterations, step.Tool, summarizeArgs(step.Input))
 
 			var outStr string
 			var toolErr error
 
 			t := tr.Get(step.Tool)
 			if step.Tool == "DoneTool" {
+				if editsMade == 0 {
+					fmt.Fprintln(out, "  -> DoneTool rejected: no file has been modified yet")
+					contextData += fmt.Sprintf("\nStep %d: DoneTool REJECTED - you have not modified any file yet. Use ReadFileTool to see the exact code, then StrReplaceTool to apply the fix before calling DoneTool.\n", i+1)
+					continue
+				}
 				fmt.Fprintln(out, "Goal achieved:", step.Input["reason"])
 				return nil
 			}
@@ -68,6 +94,10 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 
 			if toolErr != nil {
 				outStr += fmt.Sprintf("\nError: %v", toolErr)
+				fmt.Fprintf(out, "  -> %s FAILED: %v\n", step.Tool, toolErr)
+			} else if step.Tool == "StrReplaceTool" || step.Tool == "WriteFileTool" {
+				editsMade++
+				fmt.Fprintf(out, "  -> %s OK: %s\n", step.Tool, strings.TrimSpace(outStr))
 			}
 
 			// Feed result back for the next planning call
@@ -79,6 +109,6 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 		}
 	}
 
-	fmt.Fprintln(out, "Reached iteration limit (15) without DoneTool.")
+	fmt.Fprintf(out, "Reached iteration limit (%d) without DoneTool.\n", maxGoalIterations)
 	return nil
 }

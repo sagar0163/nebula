@@ -229,7 +229,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 				}
 				goal = o.issue + "\n\nPrevious attempt made no changes. Start fresh and find the right file to fix.\n" + execContextStr
 				o.executor.ResetSession()
-			} else if o.executor.LastSession() != nil && !o.MultiModel {
+			} else if ls := o.executor.LastSession(); ls != nil && len(ls.Messages) > 1 && !o.MultiModel {
 				// Resume the same conversation so the model remembers why it
 				// made its earlier edits; only the new failure is appended.
 				fmt.Println("Resuming executor conversation with the new error trace.")

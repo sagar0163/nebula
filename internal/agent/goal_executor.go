@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -154,9 +155,21 @@ func (a *Agent) nextStep(ctx context.Context, messages []llm.Message) (string, *
 		Temperature: 0.1,
 	}
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	// Errors can arrive mid-stream (after the router already handed over the
+	// stream), e.g. NVIDIA "Service temporarily overloaded", so back off
+	// exponentially here too rather than giving up after ~4s.
+	backoff := 2 * time.Second
+	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			time.Sleep(2 * time.Second)
+			if lastErr != nil {
+				fmt.Fprintf(os.Stderr, "goal: LLM request failed (%v), retrying in %v (attempt %d/5)\n", lastErr, backoff, attempt+1)
+			}
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return "", nil, ctx.Err()
+			}
+			backoff *= 2
 		}
 		tokens, err := a.router.Complete(ctx, llm.WorkloadDiagnose, req)
 		if err != nil {
@@ -240,8 +253,10 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 		}
 	}
 	sess := &GoalSession{}
+	iterations := 0
 	save := func() *GoalSession {
 		sess.Messages, sess.EditsMade = messages, editsMade
+		fmt.Fprintf(out, "[DoGoal summary] %d iterations, %d edits made\n", iterations, editsMade)
 		return sess
 	}
 	parseFailures := 0
@@ -250,6 +265,7 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 	stepsThisRun := 0
 
 	for i := 0; i < maxGoalIterations; i++ {
+		iterations = i + 1
 		if err := ctx.Err(); err != nil {
 			return save(), err
 		}

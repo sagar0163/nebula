@@ -264,8 +264,8 @@ func (r *Router) attempt(ctx context.Context, p Provider, req Request, timeout t
 			cancel()
 			noop := func() {}
 
-			if isRL(streamErr.Error()) && retries < maxRateLimitRetries {
-				fmt.Fprintf(os.Stderr, "llm: provider %s rate limited, retrying in %v...\n", p.Name(), backoff)
+			if (isRL(streamErr.Error()) || isOverloaded(streamErr.Error())) && retries < maxRateLimitRetries {
+				fmt.Fprintf(os.Stderr, "llm: provider %s rate limited/overloaded, retrying in %v...\n", p.Name(), backoff)
 				select {
 				case <-time.After(backoff):
 				case <-ctx.Done():
@@ -278,7 +278,7 @@ func (r *Router) attempt(ctx context.Context, p Provider, req Request, timeout t
 
 			// A provider that stays throttled is parked for a cooldown so the
 			// next fan-out races somebody else.
-			if isRL(streamErr.Error()) {
+			if isRL(streamErr.Error()) || isOverloaded(streamErr.Error()) {
 				r.startCooldown(p.Name(), backoff)
 			}
 			fmt.Fprintf(os.Stderr, "llm: provider %s failed: %v, falling back\n", p.Name(), streamErr)
@@ -407,6 +407,16 @@ func (r *Router) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("no available embedding provider")
+}
+
+// isOverloaded reports transient server-side capacity errors (e.g. NVIDIA NIM
+// "Service temporarily overloaded") that succeed when retried after a pause.
+func isOverloaded(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "overloaded") ||
+		strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "502")
 }
 
 func isRL(msg string) bool {

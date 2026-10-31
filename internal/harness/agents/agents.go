@@ -181,7 +181,7 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 	// Run the goal executor in-process (issue #21: shelling out to `nebula do`
 	// re-entered the harness and recursed forever).
 	fmt.Printf("[Executor] Running DoGoal in %s\n", workDir)
-	runCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, 900*time.Second) // 40 steps with a growing conversation
 	defer cancel()
 
 	// DoGoal's tools resolve relative paths against the process cwd, so

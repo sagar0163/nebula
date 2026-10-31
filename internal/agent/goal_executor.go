@@ -237,7 +237,7 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 	// Use the shared default registry so tool definitions are not duplicated
 	// inline (issue #29). NewDefaultRegistry includes RunTestsTool when a test
 	// command is configured.
-	tr := tools.NewDefaultRegistry(opts.TestCmd)
+	tr := tools.NewDefaultRegistry(opts.TestCmd, opts.WorkDir)
 
 	var messages []llm.Message
 	editsMade := 0
@@ -264,6 +264,11 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 	// On resume the model already made edits; still require a new step
 	// before DoneTool so it can't immediately quit.
 	stepsThisRun := 0
+	// testsConfirmedPassing tracks whether RunTestsTool has returned a passing
+	// result since the last edit. It is reset to false whenever a file edit is
+	// made (StrReplaceTool / WriteFileTool) so that a new round of tests is
+	// required after each change.
+	testsConfirmedPassing := false
 
 	for i := 0; i < maxGoalIterations; i++ {
 		iterations = i + 1
@@ -306,6 +311,11 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 				messages = append(messages, llm.Message{Role: "user", Content: "DoneTool REJECTED - you have not modified any file yet. Use ReadFileTool to see the exact code, then StrReplaceTool to apply the fix before calling DoneTool."})
 				continue
 			}
+			if opts.TestCmd != "" && editsMade > 0 && !testsConfirmedPassing {
+				fmt.Fprintln(out, "  -> DoneTool rejected: tests have not been confirmed passing after last edit")
+				messages = append(messages, llm.Message{Role: "user", Content: "DoneTool REJECTED - you must run RunTestsTool and confirm all tests pass before calling DoneTool. Run the tests and fix any remaining failures."})
+				continue
+			}
 			if editsMade == 0 {
 				fmt.Fprintln(out, "  -> Warning: DoneTool accepted with no file modifications")
 			}
@@ -331,7 +341,16 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 			fmt.Fprintf(out, "  -> %s FAILED: %v\n", step.Tool, toolErr)
 		} else if step.Tool == "StrReplaceTool" || step.Tool == "WriteFileTool" {
 			editsMade++
+			testsConfirmedPassing = false // new edit invalidates prior test result
 			fmt.Fprintf(out, "  -> %s OK: %s\n", step.Tool, strings.TrimSpace(outStr))
+		} else if step.Tool == "RunTestsTool" {
+			// Mark tests as passing only when output contains "passed" and no "failed"
+			lower := strings.ToLower(outStr)
+			if strings.Contains(lower, "passed") && !strings.Contains(lower, "failed") {
+				testsConfirmedPassing = true
+			} else {
+				testsConfirmedPassing = false
+			}
 		}
 
 		output := outStr

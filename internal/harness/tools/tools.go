@@ -276,7 +276,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]interface{}) (in
 	cmd := exec.CommandContext(ctx, "grep", args_list...)
 	output, err := cmd.CombinedOutput()
 	
-	if err != nil && cmd.ProcessState.ExitCode() == 1 {
+	if err != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
 		// No matches found
 		return map[string]interface{}{
 			"matches":  []string{},
@@ -495,7 +495,7 @@ func (t *SearchCodeTool) Execute(ctx context.Context, args map[string]interface{
 	out, err := cmd.CombinedOutput()
 	
 	if err != nil {
-		if cmd.ProcessState.ExitCode() == 1 {
+		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
 			return "No matches found.", nil
 		}
 		return nil, fmt.Errorf("grep failed: %v, output: %s", err, string(out))
@@ -532,10 +532,16 @@ func (t *GoToDefinitionTool) Execute(ctx context.Context, args map[string]interf
 		dir = d
 	}
 
-	// Dynamic import avoidance by just running the command directly here, 
-	// or we can just run the same sh -c ctags command. We will just execute it directly.
-	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("ctags -R -x . | grep -w '%s'", symbol))
-	cmd.Dir = dir
+	// Run ctags and pipe its output to grep using exec.Command with separate
+	// arguments to avoid shell injection from user-supplied symbol values.
+	ctagsCmd := exec.CommandContext(ctx, "ctags", "-R", "-x", ".")
+	ctagsCmd.Dir = dir
+	ctagsOut, _ := ctagsCmd.Output()
+
+	grepCmd := exec.CommandContext(ctx, "grep", "-w", symbol)
+	grepCmd.Dir = dir
+	grepCmd.Stdin = strings.NewReader(string(ctagsOut))
+	cmd := grepCmd
 	
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -575,15 +581,27 @@ func (t *SemanticSearchTool) Execute(ctx context.Context, args map[string]interf
 	return fmt.Sprintf("Semantic matches for '%s':\n(Feature in development, use search_code for exact matches)", query), nil
 }
 
-func NewDefaultRegistry() *Registry {
-	return NewDefaultRegistryWithEnv(nil)
+// NewDefaultRegistry creates a registry with all default tools. testCmd, when
+// non-empty, also registers RunTestsTool so the model can run the configured
+// test command. When testCmd is empty, RunTestsTool is omitted to avoid the
+// language auto-detection path that often returns "no test runner found".
+func NewDefaultRegistry(testCmd string) *Registry {
+	return NewDefaultRegistryWithTestCmd(testCmd, nil)
 }
 
 // NewDefaultRegistryWithEnv creates a registry with all default tools. When
 // env is non-nil, file-manipulation tools (ReadFileTool, WriteFileTool,
 // StrReplaceTool) resolve relative paths against env.WorkDir() instead of the
 // process CWD, enabling safe concurrent execution across multiple instances.
+// RunTestsTool is NOT registered; use NewDefaultRegistryWithTestCmd when a
+// test command is available.
 func NewDefaultRegistryWithEnv(env WorkDirResolver) *Registry {
+	return NewDefaultRegistryWithTestCmd("", env)
+}
+
+// NewDefaultRegistryWithTestCmd is the canonical constructor: it registers all
+// default tools and, when testCmd is non-empty, also registers RunTestsTool.
+func NewDefaultRegistryWithTestCmd(testCmd string, env WorkDirResolver) *Registry {
 	r := NewRegistry()
 	r.Register(&ShellTool{})
 	r.Register(&ReadFileTool{Env: env})
@@ -594,7 +612,9 @@ func NewDefaultRegistryWithEnv(env WorkDirResolver) *Registry {
 	r.Register(&SemanticSearchTool{})
 	r.Register(&GrepTool{})
 	r.Register(&GitTool{})
-	r.Register(&RunTestsTool{})
+	if testCmd != "" {
+		r.Register(&RunTestsTool{})
+	}
 	return r
 }
 // StrReplaceTool performs a surgical find-and-replace of a unique string in a file.

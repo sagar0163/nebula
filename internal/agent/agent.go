@@ -332,6 +332,11 @@ type RunOptions struct {
 	// run the failing tests itself and iterate on its fix.
 	TestCmd      string
 	FailingTests []string
+	// WorkDir, when set, is passed to the tool registry so every file and
+	// shell tool resolves relative paths against WorkDir instead of the
+	// process CWD. This replaces the os.Chdir call in ExecutorAgent and
+	// enables safe concurrent execution (issue #65).
+	WorkDir string
 	// ModelConfig, when set, pins every DoGoal LLM call to this provider/model
 	// via CompleteWithConfig instead of racing all providers (issue #39).
 	ModelConfig *shared.ModelConfig

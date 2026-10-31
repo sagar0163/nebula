@@ -209,22 +209,12 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 	runCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 
-	// DoGoal's tools resolve relative paths against the process cwd, so
-	// switch into workDir for the duration of the run.
-	// TODO: os.Chdir is not concurrency-safe (process-wide). The swebench
-	// runner caps Concurrency to 1 until tools set cmd.Dir = workDir instead.
-	if workDir != "." {
-		if prev, err := os.Getwd(); err == nil {
-			if err := os.Chdir(workDir); err != nil {
-				return shared.AgentOutput{}, fmt.Errorf("chdir %s: %w", workDir, err)
-			}
-			defer os.Chdir(prev)
-		}
-	}
-
 	// Route every executor LLM call through the execution-phase model (issue #39).
+	// WorkDir is passed through RunOptions so tools resolve paths against
+	// workDir using cmd.Dir instead of os.Chdir (issue #65). This removes
+	// the process-wide CWD change that blocked parallel execution.
 	execModel := e.model
-	opts := agent.RunOptions{SkipPermissions: true, ModelConfig: &execModel}
+	opts := agent.RunOptions{SkipPermissions: true, ModelConfig: &execModel, WorkDir: workDir}
 	if tc, ok := input.Metadata["testCmd"].(string); ok {
 		opts.TestCmd = tc
 	}
@@ -418,8 +408,23 @@ Do not call any tools. Output your final JSON answer only, in this format:
 		respBuilder.WriteString(t.Text)
 	}
 	
-	resp := extractJSON(respBuilder.String())
-	
+	rawResp := respBuilder.String()
+	resp := extractJSON(rawResp)
+	// If extraction failed, build a fallback so the orchestrator receives a
+	// non-empty error trace instead of silently feeding an empty string back
+	// to the executor (issue #66).
+	if resp == "" {
+		snippet := rawResp
+		if len(snippet) > 500 {
+			snippet = snippet[:500]
+		}
+		j, _ := json.Marshal(map[string]interface{}{
+			"passed":      false,
+			"error_trace": "LLM verifier returned unparseable output. Raw response (first 500 chars): " + snippet,
+		})
+		resp = string(j)
+	}
+
 	return shared.AgentOutput{
 		Context: resp,
 		Done:    true,

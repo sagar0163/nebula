@@ -10,7 +10,25 @@ import (
 	"time"
 )
 
-type ShellTool struct{}
+// absPath returns an absolute path for p: if p is already absolute it is
+// returned unchanged; otherwise it is joined with workDir. When workDir is
+// empty or "." the path is returned as-is so CWD-relative behaviour is
+// preserved for callers that have not set a workDir.
+func absPath(workDir, p string) string {
+	if workDir == "" || workDir == "." || p == "" {
+		return p
+	}
+	if len(p) > 0 && p[0] == '/' {
+		return p
+	}
+	return workDir + "/" + p
+}
+
+type ShellTool struct {
+	// WorkDir, when set, is used as the command working directory instead of
+	// the process CWD, enabling concurrent execution.
+	WorkDir string
+}
 
 func (t *ShellTool) Name() string { return "ShellTool" }
 func (t *ShellTool) Description() string { return "Executes an arbitrary shell command." }
@@ -23,11 +41,17 @@ func (t *ShellTool) Execute(ctx context.Context, input map[string]string) (strin
 		return "", fmt.Errorf("missing command")
 	}
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	if t.WorkDir != "" && t.WorkDir != "." {
+		cmd.Dir = t.WorkDir
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-type ReadFileTool struct{}
+type ReadFileTool struct {
+	// WorkDir, when set, resolves relative paths against it.
+	WorkDir string
+}
 
 func (t *ReadFileTool) Name() string { return "ReadFileTool" }
 func (t *ReadFileTool) Description() string {
@@ -48,7 +72,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (st
 	if path == "" {
 		return "", fmt.Errorf("missing path")
 	}
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(absPath(t.WorkDir, path))
 	if err != nil {
 		return "", err
 	}
@@ -86,7 +110,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (st
 	return strings.TrimSuffix(b.String(), "\n") + note, nil
 }
 
-type WriteFileTool struct{}
+type WriteFileTool struct {
+	// WorkDir, when set, resolves relative paths against it.
+	WorkDir string
+}
 
 func (t *WriteFileTool) Name() string { return "WriteFileTool" }
 func (t *WriteFileTool) Description() string { return "Writes content to a file." }
@@ -102,11 +129,14 @@ func (t *WriteFileTool) Execute(ctx context.Context, input map[string]string) (s
 	if path == "" {
 		return "", fmt.Errorf("missing path")
 	}
-	err := os.WriteFile(path, []byte(content), 0644)
+	err := os.WriteFile(absPath(t.WorkDir, path), []byte(content), 0644)
 	return "File written successfully.", err
 }
 
-type GrepTool struct{}
+type GrepTool struct {
+	// WorkDir, when set, is used as cmd.Dir so paths are resolved correctly.
+	WorkDir string
+}
 
 func (t *GrepTool) Name() string { return "GrepTool" }
 func (t *GrepTool) Description() string { return "Searches for a pattern in files using grep." }
@@ -126,6 +156,9 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]string) (string
 	}
 	// Prefer git grep: tracked files only, skips .git and binaries (-I).
 	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "-e", pattern, "--", path)
+	if t.WorkDir != "" && t.WorkDir != "." {
+		cmd.Dir = t.WorkDir
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		code := -1
@@ -139,6 +172,9 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]string) (string
 		cmd = exec.CommandContext(ctx, "grep", "-rn", "-I",
 			"--include=*.go", "--include=*.py", "--include=*.js", "--include=*.ts",
 			"--exclude-dir=.git", "-e", pattern, path)
+		if t.WorkDir != "" && t.WorkDir != "." {
+			cmd.Dir = t.WorkDir
+		}
 		out, err = cmd.CombinedOutput()
 		if err != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
 			return "", nil
@@ -155,7 +191,10 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]string) (string
 	return strings.Join(lines, "\n"), nil
 }
 
-type GitTool struct{}
+type GitTool struct {
+	// WorkDir, when set, is used as cmd.Dir so git operates on the right repo.
+	WorkDir string
+}
 
 func (t *GitTool) Name() string { return "GitTool" }
 func (t *GitTool) Description() string { return "Runs common git commands (log, diff, status, commit)." }
@@ -169,6 +208,9 @@ func (t *GitTool) Execute(ctx context.Context, input map[string]string) (string,
 	}
 	argsSlice := strings.Split(args, " ")
 	cmd := exec.CommandContext(ctx, "git", argsSlice...)
+	if t.WorkDir != "" && t.WorkDir != "." {
+		cmd.Dir = t.WorkDir
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -189,7 +231,10 @@ func (t *DoneTool) Execute(ctx context.Context, input map[string]string) (string
 }
 
 // StrReplaceTool performs a surgical find-and-replace of a unique string in a file.
-type StrReplaceTool struct{}
+type StrReplaceTool struct {
+	// WorkDir, when set, resolves relative paths against it.
+	WorkDir string
+}
 
 func (t *StrReplaceTool) Name() string { return "StrReplaceTool" }
 func (t *StrReplaceTool) Description() string {
@@ -212,7 +257,7 @@ func (t *StrReplaceTool) Execute(ctx context.Context, input map[string]string) (
 		return "", fmt.Errorf("missing old_string")
 	}
 	newStr := input["new_string"]
-	return StrReplaceInFile(path, oldStr, newStr)
+	return StrReplaceInFile(absPath(t.WorkDir, path), oldStr, newStr)
 }
 
 // StrReplaceInFile replaces the single occurrence of oldStr with newStr in path.
@@ -364,17 +409,17 @@ except SyntaxError as e:
 
 // NewDefaultRegistry builds the standard tool registry used by the goal
 // executor. testCmd is optional; when non-empty, a RunTestsTool is included so
-// the model can verify its own fixes. Centralising this here means
-// DoGoalSession and any other caller pull from the shared registry rather than
-// duplicating the list of registrations.
-func NewDefaultRegistry(testCmd string) *Registry {
+// the model can verify its own fixes. workDir, when non-empty, is set on every
+// tool so file and shell operations resolve relative paths against workDir
+// instead of the process CWD, enabling safe concurrent execution.
+func NewDefaultRegistry(testCmd, workDir string) *Registry {
 	r := NewRegistry()
-	r.Register(&ShellTool{})
-	r.Register(&ReadFileTool{})
-	r.Register(&WriteFileTool{})
-	r.Register(&StrReplaceTool{})
-	r.Register(&GrepTool{})
-	r.Register(&GitTool{})
+	r.Register(&ShellTool{WorkDir: workDir})
+	r.Register(&ReadFileTool{WorkDir: workDir})
+	r.Register(&WriteFileTool{WorkDir: workDir})
+	r.Register(&StrReplaceTool{WorkDir: workDir})
+	r.Register(&GrepTool{WorkDir: workDir})
+	r.Register(&GitTool{WorkDir: workDir})
 	r.Register(&DoneTool{})
 	if testCmd != "" {
 		r.Register(&RunTestsTool{TestCmd: testCmd})

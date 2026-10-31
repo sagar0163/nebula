@@ -71,7 +71,7 @@ func NewOrchestrator(router *llm.Router, routing shared.ModelRouting, vectorStor
 		router:        router,
 		modelRouting:  routing,
 		contextMgr:    contextpkg.NewContextManager(8000, nil),
-		toolRegistry:  tools.NewDefaultRegistry(),
+		toolRegistry:  tools.NewDefaultRegistry(""),
 		maxSteps:      20,
 		stepTimeout:   5 * time.Minute,
 		instanceTimeout: 25 * time.Minute,
@@ -245,14 +245,15 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	}
 	instanceDeadline := o.runStart.Add(instanceTimeout)
 	reserved := 2 * time.Minute // planning + verification + critique
-	perAttempt := (time.Until(instanceDeadline) - reserved) / time.Duration(maxAttempts)
-	if perAttempt < 2*time.Minute {
-		perAttempt = 2 * time.Minute
-	}
-	fmt.Printf("Executor per-attempt timeout: %s\n", perAttempt)
 	criticRejected := false
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		remainingAttempts := maxAttempts - attempt + 1
+		perAttempt := (time.Until(instanceDeadline) - reserved) / time.Duration(remainingAttempts)
+		if perAttempt < 2*time.Minute {
+			perAttempt = 2 * time.Minute
+		}
+		fmt.Printf("Executor per-attempt timeout: %s\n", perAttempt)
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
 		goal := o.issue + locHints + "\n\nPlanning context:\n" + execContextStr
 		if attempt > 1 {
@@ -294,7 +295,13 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		
 		if o.MultiModel {
 			fmt.Println("Running multi-model consensus check...")
-			out1, err1 := o.executor.Execute(ctx, execCtx)
+			mmCtx := execCtx
+			mmCtx.Metadata = make(map[string]interface{})
+			for k, v := range execCtx.Metadata {
+				mmCtx.Metadata[k] = v
+			}
+			mmCtx.Metadata["timeout"] = perAttempt / 2
+			out1, err1 := o.executor.Execute(ctx, mmCtx)
 			// Issue #42: reset the repo to base state before attempt 2 so it
 			// does not inherit edits from attempt 1. Re-apply the test patch
 			// so the failing tests are still present for the second attempt.
@@ -306,7 +313,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 				}
 			}
 			o.executor.ResetSession()
-			out2, err2 := o.executor.Execute(ctx, execCtx)
+			out2, err2 := o.executor.Execute(ctx, mmCtx)
 			
 			if err1 == nil && err2 == nil {
 				if out1.Context == out2.Context {

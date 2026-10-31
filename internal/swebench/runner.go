@@ -230,42 +230,21 @@ func (r *Runner) runInstance(ctx context.Context, inst *Instance) *Result {
 		result.Duration = time.Since(start)
 		return result
 	}
-	fmt.Printf("DEBUG: Goal being sent:\n%s\n", goal)
+	defer os.Chdir(prevDir)
 
 	traj, err := orch.Run(runCtx, goal, workDir)
-	os.Chdir(prevDir)
-	if traj != nil {
-		fmt.Printf("DEBUG: Harness finished with %d steps\n", len(traj.Steps))
-	}
+	_ = traj // available for future structured logging
 	if err != nil {
-		fmt.Printf("DEBUG: Harness error: %v\n", err)
 		result.Status = "error"
 		result.Error = fmt.Sprintf("harness error: %v", err)
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	// Extract patch from output
-	fmt.Printf("DEBUG: Extracting patch from workDir: %s\n", workDir)
-	// Also check git status
-	cmd := exec.CommandContext(ctx, "git", "status")
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err == nil {
-		fmt.Printf("DEBUG: Git status: %s\n", string(out))
-	}
-	// Also check git diff
-	cmd = exec.CommandContext(ctx, "git", "diff", "--no-color")
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err == nil {
-		fmt.Printf("DEBUG: Git diff before extractPatch: %s\n", string(out))
-	}
-
 	patch := r.extractPatch(runCtx, workDir, inst.TestPatch)
-	fmt.Printf("DEBUG: Extracted patch: %q\n", patch)
 	result.GeneratedPatch = patch
 
 	if patch == "" {
-		fmt.Printf("DEBUG: No patch generated\n")
 		result.Status = "failed"
 		result.Error = "no patch generated"
 		result.Duration = time.Since(start)
@@ -320,19 +299,11 @@ func parseTestPatchFiles(patch string) []string {
 // extractPatch extracts a unified diff from the agent's output.
 // Uses the new robust patch generation.
 func (r *Runner) extractPatch(ctx context.Context, workDir string, testPatch string) string {
-	fmt.Printf("DEBUG: extractPatch called for workDir: %s\n", workDir)
 	excludePaths := parseTestPatchFiles(testPatch)
 	patchResult, err := GeneratePatch(ctx, workDir, excludePaths...)
-	fmt.Printf("DEBUG: GeneratePatch returned err=%v, patchResult=%+v\n", err, patchResult)
-	if err != nil {
-		fmt.Printf("DEBUG: GeneratePatch error: %v\n", err)
+	if err != nil || !patchResult.Valid {
 		return ""
 	}
-	if !patchResult.Valid {
-		fmt.Printf("DEBUG: Patch not valid: %s\n", patchResult.Error)
-		return ""
-	}
-	fmt.Printf("DEBUG: Patch valid, length=%d\n", len(patchResult.Diff))
 	return patchResult.Diff
 }
 

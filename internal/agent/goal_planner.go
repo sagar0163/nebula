@@ -102,11 +102,16 @@ Do not include any explanation, markdown, or text outside the JSON.`, goal, cont
 		var plan models.GoalPlan
 		if err := json.Unmarshal([]byte(jsonStr), &plan); err != nil {
 			lastErr = fmt.Errorf("failed to parse goal plan (attempt %d/%d): %w", attempt+1, maxRetries+1, err)
-			
-			// Feed the error back into the prompt for the next iteration
 			req.Messages = append(req.Messages, llm.Message{Role: "assistant", Content: res})
 			req.Messages = append(req.Messages, llm.Message{Role: "user", Content: fmt.Sprintf("Your last response was invalid JSON: %v. Please output ONLY valid JSON without markdown or text.", err)})
-			
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		if len(plan.Steps) == 0 {
+			lastErr = fmt.Errorf("planner returned empty steps array (attempt %d/%d)", attempt+1, maxRetries+1)
+			req.Messages = append(req.Messages, llm.Message{Role: "assistant", Content: res})
+			req.Messages = append(req.Messages, llm.Message{Role: "user", Content: `Your response had an empty "steps" array. You must return exactly one step. If you believe the goal is complete, return DoneTool: {"steps": [{"tool": "DoneTool", "input": {"reason": "done"}}]}`})
 			time.Sleep(2 * time.Second)
 			continue
 		}

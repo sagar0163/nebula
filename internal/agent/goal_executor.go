@@ -72,7 +72,10 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 		}
 
 		if len(steps) == 0 {
-			fmt.Fprintln(out, "Goal achieved or no further steps planned.")
+			if editsMade == 0 {
+				return fmt.Errorf("planner returned 0 steps with no edits made (iteration %d)", i+1)
+			}
+			fmt.Fprintln(out, "Goal achieved: planner returned no further steps.")
 			return nil
 		}
 

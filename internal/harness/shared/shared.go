@@ -150,8 +150,8 @@ type ModelRouting map[Phase]ModelConfig
 // These map to providers registered in buildRouter() via the NEBULA_NVIDIA_KEY / NEBULA_GROQ_KEY env vars
 // or OS keyring entries — never hardcoded here.
 var DefaultModelRouting = ModelRouting{
-	PhasePlanning:     {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.1, MaxTokens: 4000},
-	PhaseExecution:    {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.1, MaxTokens: 8000},
-	PhaseVerification: {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.0, MaxTokens: 2000},
-	PhaseCritique:     {Provider: "nvidia", Model: "nvidia/nemotron-3-super-120b-a12b", Temperature: 0.1, MaxTokens: 4000},
+	PhasePlanning:     {Provider: "nvidia", Model: "nvidia/nemotron-3-ultra-550b-a55b", Temperature: 0.1, MaxTokens: 4000},
+	PhaseExecution:    {Provider: "nvidia", Model: "nvidia/nemotron-3-ultra-550b-a55b", Temperature: 0.1, MaxTokens: 8000},
+	PhaseVerification: {Provider: "nvidia", Model: "nvidia/nemotron-3-ultra-550b-a55b", Temperature: 0.0, MaxTokens: 2000},
+	PhaseCritique:     {Provider: "nvidia", Model: "nvidia/nemotron-3-ultra-550b-a55b", Temperature: 0.1, MaxTokens: 4000},
 }

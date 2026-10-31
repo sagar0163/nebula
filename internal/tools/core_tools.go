@@ -31,7 +31,7 @@ type ReadFileTool struct{}
 
 func (t *ReadFileTool) Name() string { return "ReadFileTool" }
 func (t *ReadFileTool) Description() string {
-	return "Reads a file. For large files pass start_line/end_line (1-based, inclusive) to read only that range; find line numbers first with GrepTool or `grep -n`."
+	return "Reads a file with line numbers (\"N: text\"). Files over 200 lines return the first 200 unless start_line/end_line (1-based, inclusive) are given. The \"N: \" prefixes are NOT part of the file; strip them before using text in StrReplaceTool old_string."
 }
 func (t *ReadFileTool) Parameters() map[string]string {
 	return map[string]string{
@@ -40,6 +40,9 @@ func (t *ReadFileTool) Parameters() map[string]string {
 		"end_line":   "Optional last line to read (inclusive)",
 	}
 }
+
+const readFileDefaultLines = 200
+
 func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (string, error) {
 	path := input["path"]
 	if path == "" {
@@ -49,11 +52,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (st
 	if err != nil {
 		return "", err
 	}
-	if input["start_line"] == "" && input["end_line"] == "" {
-		return string(content), nil
-	}
-	lines := strings.Split(string(content), "\n")
-	start, end := 1, len(lines)
+	text := strings.TrimSuffix(string(content), "\n")
+	lines := strings.Split(text, "\n")
+	total := len(lines)
+	start, end := 1, total
+	ranged := input["start_line"] != "" || input["end_line"] != ""
 	if v := input["start_line"]; v != "" {
 		if n, e := strconv.Atoi(strings.TrimSpace(v)); e == nil && n > 0 {
 			start = n
@@ -64,14 +67,23 @@ func (t *ReadFileTool) Execute(ctx context.Context, input map[string]string) (st
 			end = n
 		}
 	}
-	if end > len(lines) {
-		end = len(lines)
+	note := ""
+	if !ranged && total > readFileDefaultLines {
+		end = readFileDefaultLines
+		note = fmt.Sprintf("\n[showing first %d of %d lines — use start_line/end_line for more]", readFileDefaultLines, total)
+	}
+	if end > total {
+		end = total
 	}
 	if start > end {
-		return "", fmt.Errorf("start_line %d is past end of file (%d lines)", start, len(lines))
+		return "", fmt.Errorf("start_line %d is past end of file (%d lines)", start, total)
 	}
-	// Raw text (no line-number prefixes) so it can be copied verbatim into StrReplaceTool old_string.
-	return fmt.Sprintf("[lines %d-%d of %d]\n%s", start, end, len(lines), strings.Join(lines[start-1:end], "\n")), nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "[lines %d-%d of %d — %s]\n", start, end, total, path)
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(&b, "%d: %s\n", i, lines[i-1])
+	}
+	return strings.TrimSuffix(b.String(), "\n") + note, nil
 }
 
 type WriteFileTool struct{}
@@ -104,19 +116,43 @@ func (t *GrepTool) Parameters() map[string]string {
 		"path":    "The path or directory to search in (e.g. '.')",
 	}
 }
+const grepMaxMatches = 50
+
 func (t *GrepTool) Execute(ctx context.Context, input map[string]string) (string, error) {
 	pattern := input["pattern"]
 	path := input["path"]
 	if pattern == "" || path == "" {
 		return "", fmt.Errorf("missing pattern or path")
 	}
-	cmd := exec.CommandContext(ctx, "grep", "-rn", pattern, path)
-	out, err := cmd.CombinedOutput()
-	// grep returns exit code 1 if no lines match, which is not an error for us.
-	if err != nil && cmd.ProcessState.ExitCode() == 1 {
-		return "", nil // no match
+	// Prefer git grep: tracked files only, skips .git and binaries (-I).
+	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "-e", pattern, "--", path)
+	out, err := cmd.Output()
+	if err != nil {
+		code := -1
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+		}
+		if code == 1 {
+			return "", nil // no match
+		}
+		// Not a git repo (or git failed): fall back to grep over source files.
+		cmd = exec.CommandContext(ctx, "grep", "-rn", "-I",
+			"--include=*.go", "--include=*.py", "--include=*.js", "--include=*.ts",
+			"--exclude-dir=.git", "-e", pattern, path)
+		out, err = cmd.CombinedOutput()
+		if err != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
+			return "", nil
+		}
+		if err != nil {
+			return string(out), err
+		}
 	}
-	return string(out), err
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) > grepMaxMatches {
+		extra := len(lines) - grepMaxMatches
+		lines = append(lines[:grepMaxMatches], fmt.Sprintf("[%d more matches not shown — narrow your pattern]", extra))
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 type GitTool struct{}
@@ -188,7 +224,12 @@ func StrReplaceInFile(path, oldStr, newStr string) (string, error) {
 	content := string(data)
 	switch n := strings.Count(content, oldStr); n {
 	case 0:
-		return "", fmt.Errorf("old_string not found in %s", path)
+		// Retry ignoring trailing whitespace and tab/space differences.
+		if fixed, ok := normalizedReplace(content, oldStr, newStr); ok {
+			content, oldStr, newStr = fixed, fixed, fixed // write fixed content below
+		} else {
+			return "", fmt.Errorf("old_string not found in %s%s", path, similarLinesHint(content, oldStr))
+		}
 	case 1:
 	default:
 		return "", fmt.Errorf("old_string appears %d times in %s; it must be unique (add more surrounding context)", n, path)
@@ -198,6 +239,7 @@ func StrReplaceInFile(path, oldStr, newStr string) (string, error) {
 		return "", err
 	}
 	if err := os.WriteFile(path, []byte(strings.Replace(content, oldStr, newStr, 1)), info.Mode().Perm()); err != nil {
+		// (for a whitespace-normalized match content==oldStr==newStr, so this writes the fixed content)
 		return "", err
 	}
 	// Lint gate: reject edits that leave a Python file syntactically invalid.
@@ -210,6 +252,96 @@ func StrReplaceInFile(path, oldStr, newStr string) (string, error) {
 		}
 	}
 	return fmt.Sprintf("Replaced 1 occurrence in %s", path), nil
+}
+
+// normWS normalizes a line for whitespace-insensitive comparison.
+func normWS(s string) string {
+	return strings.TrimRight(strings.ReplaceAll(s, "\t", "    "), " \r")
+}
+
+// normalizedReplace finds oldStr in content line-by-line after whitespace
+// normalization. If exactly one match exists it returns content with those
+// original lines replaced by newStr.
+func normalizedReplace(content, oldStr, newStr string) (string, bool) {
+	cLines := strings.Split(content, "\n")
+	oLines := strings.Split(strings.TrimRight(oldStr, "\n"), "\n")
+	if len(oLines) == 0 || len(oLines) > len(cLines) {
+		return "", false
+	}
+	match := -1
+	for i := 0; i+len(oLines) <= len(cLines); i++ {
+		ok := true
+		for j, ol := range oLines {
+			if normWS(cLines[i+j]) != normWS(ol) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			if match >= 0 {
+				return "", false // ambiguous
+			}
+			match = i
+		}
+	}
+	if match < 0 {
+		return "", false
+	}
+	repl := strings.Split(strings.TrimRight(newStr, "\n"), "\n")
+	if newStr == "" {
+		repl = nil
+	}
+	out := append([]string{}, cLines[:match]...)
+	out = append(out, repl...)
+	out = append(out, cLines[match+len(oLines):]...)
+	return strings.Join(out, "\n"), true
+}
+
+// similarLinesHint returns up to 3 file lines resembling the first line of
+// oldStr, so the model can correct its old_string without re-reading.
+func similarLinesHint(content, oldStr string) string {
+	first := ""
+	for _, l := range strings.Split(oldStr, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			first = t
+			break
+		}
+	}
+	if first == "" {
+		return ""
+	}
+	cLines := strings.Split(content, "\n")
+	var hits []string
+	add := func(i int) {
+		if len(hits) < 3 {
+			hits = append(hits, fmt.Sprintf("  %d: %s", i+1, cLines[i]))
+		}
+	}
+	for i, l := range cLines {
+		if strings.Contains(strings.TrimSpace(l), first) {
+			add(i)
+		}
+	}
+	if len(hits) == 0 {
+		// Looser: lines containing the longest word-ish token of the first line.
+		key := ""
+		for _, f := range strings.FieldsFunc(first, func(r rune) bool { return r == ' ' || r == '(' || r == ')' || r == ',' || r == ':' || r == '=' }) {
+			if len(f) > len(key) {
+				key = f
+			}
+		}
+		if len(key) >= 3 {
+			for i, l := range cLines {
+				if strings.Contains(l, key) {
+					add(i)
+				}
+			}
+		}
+	}
+	if len(hits) == 0 {
+		return ". No similar lines found; re-read the file with ReadFileTool"
+	}
+	return ". Closest candidate lines (copy exact text, without the \"N: \" prefix):\n" + strings.Join(hits, "\n")
 }
 
 // pythonSyntaxError parses path with python3's ast module. It reports

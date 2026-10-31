@@ -87,10 +87,15 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 
 			t := tr.Get(step.Tool)
 			if step.Tool == "DoneTool" {
-				if editsMade == 0 {
-					fmt.Fprintln(out, "  -> DoneTool rejected: no file has been modified yet")
+				if editsMade == 0 && i < 3 {
+					// Only block early exits; later DoneTool calls are allowed so the
+					// model can't burn every iteration on rejected DoneTool calls.
+					fmt.Fprintln(out, "  -> DoneTool rejected: no file modified yet (early exit blocked)")
 					contextData += fmt.Sprintf("\nStep %d: DoneTool REJECTED - you have not modified any file yet. Use ReadFileTool to see the exact code, then StrReplaceTool to apply the fix before calling DoneTool.\n", i+1)
 					continue
+				}
+				if editsMade == 0 {
+					fmt.Fprintln(out, "  -> Warning: DoneTool accepted with no file modifications")
 				}
 				fmt.Fprintln(out, "Goal achieved:", strInput["reason"])
 				return nil

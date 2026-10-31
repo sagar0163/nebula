@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -196,7 +195,7 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 		}
 	}
 
-	if runErr := e.agentRunner.DoGoal(runCtx, goal, agent.RunOptions{SkipPermissions: true}, io.Discard); runErr != nil {
+	if runErr := e.agentRunner.DoGoal(runCtx, goal, agent.RunOptions{SkipPermissions: true}, os.Stdout); runErr != nil {
 		fmt.Printf("[Executor] DoGoal exited with error: %v\n", runErr)
 	} else {
 		fmt.Println("[Executor] DoGoal completed.")

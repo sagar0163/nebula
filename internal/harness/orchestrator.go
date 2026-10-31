@@ -196,26 +196,32 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	// Executor-Verifier Retry Loop
 	execContextStr := planOutput.Context
 	resolved := false
+	prevPatch := ""
 	
 	for attempt := 1; attempt <= 3; attempt++ {
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
-		if attempt > 1 {
-			// Reset the working tree so this attempt doesn't build on the last
-			// attempt's broken edits. Re-apply the test patch afterwards.
-			exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
-			exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
-			if o.testPatch != "" {
-				if _, err := applyTestPatch(ctx, workDir, o.testPatch); err != nil {
-					fmt.Printf("Warning: failed to re-apply test patch: %v\n", err)
-				}
-			}
-		}
-
-		execCtx := o.buildExecutionContext(execContextStr)
 		goal := o.issue
 		if attempt > 1 {
-			goal = o.issue + "\n\nPrevious attempt failed. Error trace:\n" + execContextStr
+			trimmed := strings.TrimSpace(prevPatch)
+			if trimmed == "" || trimmed == "No changes were made." {
+				// Previous attempt made nothing: reset and retry clean.
+				exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
+				exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
+				if o.testPatch != "" {
+					if _, err := applyTestPatch(ctx, workDir, o.testPatch); err != nil {
+						fmt.Printf("Warning: failed to re-apply test patch: %v\n", err)
+					}
+				}
+				goal = o.issue + "\n\nPrevious attempt made no changes. Start fresh and find the right file to fix.\n" + execContextStr
+			} else {
+				// Previous attempt made changes that didn't pass: keep them and refine.
+				fmt.Println("Keeping previous attempt's changes; asking executor to refine them.")
+				goal = o.issue + "\n\nPrevious attempt made changes but tests still fail. Current diff:\n" + prevPatch +
+					"\n\n" + execContextStr +
+					"\nDo NOT undo the previous changes. Review them and make additional fixes if needed, or correct them."
+			}
 		}
+		execCtx := o.buildExecutionContext(execContextStr)
 		execCtx.Metadata = map[string]interface{}{"workDir": workDir, "goal": goal}
 		
 		execStart := time.Now()
@@ -257,6 +263,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			return traj, err
 		}
 		
+		prevPatch = execOutput.Context
 		traj.Steps = append(traj.Steps, shared.Step{
 			Phase:     shared.PhaseExecution,
 			ToolCalls: execOutput.ToolCalls,

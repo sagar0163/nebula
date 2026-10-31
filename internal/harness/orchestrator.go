@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 	"strings"
 
@@ -175,6 +176,18 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		issue += locHints
 	}
 
+	// Issue #55: localization v2 — run the failing tests once (pre-run) to
+	// capture the actual error traceback, then extract repo-relative file:line
+	// hints from /testbed/ paths in the output.
+	if len(o.failingTests) == 0 {
+		// Try to extract from issue text early so we can pre-run
+		o.failingTests = extractFailingTests(o.issue)
+	}
+	if preRunHints := o.runPreTestLocalization(ctx, workDir); preRunHints != "" {
+		locHints += preRunHints
+		issue += preRunHints
+	}
+
 	planCtx := o.buildPlanningContext(issue, workDir)
 	planOutput, err := o.planner.Execute(ctx, planCtx)
 	if logger != nil {
@@ -242,33 +255,26 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
 		goal := o.issue + locHints + "\n\nPlanning context:\n" + execContextStr
-		resume := false
 		if attempt > 1 {
-			trimmed := strings.TrimSpace(prevPatch)
-			if trimmed == "" || trimmed == "No changes were made." {
-				// Previous attempt made nothing: reset and retry clean.
-				exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
-				exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
-				if o.testPatch != "" {
-					if _, err := applyTestPatch(ctx, workDir, o.testPatch); err != nil {
-						fmt.Printf("Warning: failed to re-apply test patch: %v\n", err)
-					}
+			// Issue #48: always resample (fresh conversation) on retry — never
+			// resume the same conversation thread. Reset the repo to a clean
+			// state so the new attempt starts from the original baseline.
+			fmt.Printf("Attempt %d: discarding previous session and resetting repo for fresh resample.\n", attempt)
+			exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
+			exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
+			if o.testPatch != "" {
+				if _, err := applyTestPatch(ctx, workDir, o.testPatch); err != nil {
+					fmt.Printf("Warning: failed to re-apply test patch: %v\n", err)
 				}
+			}
+			o.executor.ResetSession()
+			// Build the fresh goal: original problem + prior error trace so the
+			// new attempt knows what went wrong, but without any prior reasoning.
+			if strings.TrimSpace(prevPatch) == "" || strings.TrimSpace(prevPatch) == "No changes were made." {
 				goal = o.issue + locHints + "\n\nPrevious attempt made no changes. Start fresh and find the right file to fix.\n" + execContextStr
-				o.executor.ResetSession()
-			} else if ls := o.executor.LastSession(); ls != nil && len(ls.Messages) > 1 && !o.MultiModel {
-				// Resume the same conversation so the model remembers why it
-				// made its earlier edits; only the new failure is appended.
-				fmt.Println("Resuming executor conversation with the new error trace.")
-				resume = true
-				goal = "The previous attempt produced a patch but tests still failed. Error:\n" + lastTrace +
-					"\n\nContinue fixing. The patch you already applied is still in place — build on it or correct it."
 			} else {
-				// Previous attempt made changes that didn't pass: keep them and refine.
-				fmt.Println("Keeping previous attempt's changes; asking executor to refine them.")
-				goal = o.issue + locHints + "\n\nPrevious attempt made changes but tests still fail. Current diff:\n" + prevPatch +
-					"\n\n" + execContextStr +
-					"\nDo NOT undo the previous changes. Review them and make additional fixes if needed, or correct them."
+				goal = o.issue + locHints + "\n\nPrevious attempt produced a patch that did not pass tests. Error:\n" + lastTrace +
+					"\n\nStart fresh. Do not assume the previous approach was correct.\n\nPlanning context:\n" + execContextStr
 			}
 		}
 		execCtx := o.buildExecutionContext(execContextStr)
@@ -277,7 +283,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			"goal":         goal,
 			"testCmd":      testCmd,
 			"failingTests": o.failingTests,
-			"resume":       resume,
+			"resume":       false,
 			"timeout":      perAttempt,
 		}
 		
@@ -289,6 +295,17 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		if o.MultiModel {
 			fmt.Println("Running multi-model consensus check...")
 			out1, err1 := o.executor.Execute(ctx, execCtx)
+			// Issue #42: reset the repo to base state before attempt 2 so it
+			// does not inherit edits from attempt 1. Re-apply the test patch
+			// so the failing tests are still present for the second attempt.
+			exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run()
+			exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd", "-e", ".nebula").Run()
+			if o.testPatch != "" {
+				if _, err := applyTestPatch(ctx, workDir, o.testPatch); err != nil {
+					fmt.Printf("Warning: failed to re-apply test patch before MultiModel run 2: %v\n", err)
+				}
+			}
+			o.executor.ResetSession()
 			out2, err2 := o.executor.Execute(ctx, execCtx)
 			
 			if err1 == nil && err2 == nil {
@@ -658,6 +675,58 @@ func isSourceFile(name string) bool {
 		return true
 	}
 	return false
+}
+
+// runPreTestLocalization runs the failing tests once before the executor loop
+// to capture the actual error traceback (issue #55). It extracts file:line
+// targets from /testbed/ paths and returns a localization-hint block, or ""
+// if nothing useful was found.
+func (o *Orchestrator) runPreTestLocalization(ctx context.Context, workDir string) string {
+	if len(o.failingTests) == 0 {
+		return ""
+	}
+	cmd := testrunner.BuildTestCommand(workDir, o.failingTests)
+	if cmd == "" {
+		return ""
+	}
+	fmt.Println("[localization v2] Running failing tests to capture traceback...")
+	preCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	out, _ := exec.CommandContext(preCtx, "bash", "-c", cmd).CombinedOutput()
+	rawOutput := string(out)
+	if rawOutput == "" {
+		return ""
+	}
+	hints := parseTestbedPaths(rawOutput)
+	if hints == "" {
+		return ""
+	}
+	fmt.Print("[localization v2] Traceback-derived file hints:\n" + hints)
+	return "\n\n[LOCALIZATION HINTS - TRACEBACK]\n" + hints
+}
+
+// parseTestbedPaths extracts repo-relative file:line hints from test output
+// containing /testbed/ paths (e.g. /testbed/src/flask/blueprints.py:42).
+// It strips the /testbed/ prefix to produce repo-relative paths.
+func parseTestbedPaths(output string) string {
+	// Match /testbed/<path>:<line> patterns in pytest tracebacks.
+	re := regexp.MustCompile(`/testbed/([^\s:]+\.py):(\d+)`)
+	seen := map[string]bool{}
+	var lines []string
+	for _, m := range re.FindAllStringSubmatch(output, -1) {
+		key := m[1] + ":" + m[2]
+		if !seen[key] {
+			seen[key] = true
+			lines = append(lines, "  - "+key)
+		}
+		if len(lines) >= 20 {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "Exact file:line targets from pre-run traceback (read these first):\n" + strings.Join(lines, "\n") + "\n"
 }
 
 // deleteTrajectory removes the persisted trajectory for workDir.

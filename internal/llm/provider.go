@@ -32,10 +32,30 @@ type Request struct {
 	Model string
 }
 
+// ContentPart is one element of a structured message content array.
+// Role "user" messages may carry a mix of text and tool-result parts;
+// role "assistant" messages with tool calls carry only text (the reasoning)
+// alongside ToolCalls, not inside Content.
+type ContentPart struct {
+	Type       string `json:"type"`                  // "text" | "tool_result"
+	Text       string `json:"text,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"` // for type "tool_result"
+	Content    string `json:"content,omitempty"`      // for type "tool_result"
+}
+
 // Message is a single turn in the conversation.
+//
+// For plain text turns set Role and Content only.
+// For assistant turns that invoke tools, set Role "assistant", Content
+// (reasoning text, may be empty), and ToolCalls.
+// For tool-result turns set Role "tool", ToolCallID, and Content.
+// Name is used for role "tool" to label which function returned the result.
 type Message struct {
-	Role    string // "user" | "assistant" | "tool"
-	Content string
+	Role       string     `json:"role"`                  // "user" | "assistant" | "tool"
+	Content    string     `json:"content"`               // plain-text content
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`  // set by assistant when calling tools
+	ToolCallID string     `json:"tool_call_id,omitempty"` // set on role "tool" replies
+	Name       string     `json:"name,omitempty"`         // optional function name for role "tool"
 }
 
 // Tool is a function the LLM can call.
@@ -45,11 +65,22 @@ type Tool struct {
 	Parameters  any // JSON schema
 }
 
+// FunctionCall holds the name and arguments of a tool invocation.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // raw JSON
+}
+
 // ToolCall is a function call the LLM requested.
 type ToolCall struct {
-	ID         string
-	Name       string
-	Arguments  string // raw JSON
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`     // always "function"
+	Function FunctionCall `json:"function"`
+
+	// Deprecated fields kept for callers that still use the flat form.
+	// New code should use Function.Name and Function.Arguments instead.
+	Name      string `json:"-"`
+	Arguments string `json:"-"` // raw JSON
 }
 
 // Provider is the interface every LLM backend must satisfy.

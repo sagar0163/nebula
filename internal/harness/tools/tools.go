@@ -12,6 +12,22 @@ import (
 	"github.com/sagar0163/nebula/internal/harness/shared"
 )
 
+// WorkDirResolver is the subset of harness.Environment that tools need to
+// resolve relative paths against a fixed working directory. Using an interface
+// (rather than importing harness directly) avoids a circular dependency.
+type WorkDirResolver interface {
+	WorkDir() string
+}
+
+// resolveEnvPath returns an absolute path for p. If env is non-nil and p is
+// relative, p is joined to env.WorkDir(); otherwise p is returned unchanged.
+func resolveEnvPath(env WorkDirResolver, p string) string {
+	if env == nil || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(env.WorkDir(), p)
+}
+
 // Tool represents an executable tool
 type Tool interface {
 	Name() string
@@ -121,7 +137,11 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]interface{}) (i
 }
 
 // ReadFileTool reads file contents
-type ReadFileTool struct{}
+type ReadFileTool struct {
+	// Env, when non-nil, resolves relative paths against Env.WorkDir() instead
+	// of the process CWD.
+	Env WorkDirResolver
+}
 
 func (t *ReadFileTool) Name() string { return "read_file" }
 func (t *ReadFileTool) Description() string { return "Read the contents of a file" }
@@ -149,7 +169,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		endLine = int(v)
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(resolveEnvPath(t.Env, path))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -175,7 +195,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 }
 
 // WriteFileTool writes file contents
-type WriteFileTool struct{}
+type WriteFileTool struct {
+	// Env, when non-nil, resolves relative paths against Env.WorkDir().
+	Env WorkDirResolver
+}
 
 func (t *WriteFileTool) Name() string { return "write_file" }
 func (t *WriteFileTool) Description() string { return "Write content to a file" }
@@ -198,17 +221,18 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 
 	// Ensure directory exists
-	dir := filepath.Dir(path)
+	abs := resolveEnvPath(t.Env, path)
+	dir := filepath.Dir(abs)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(abs, []byte(content), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	return map[string]interface{}{
-		"path":    path,
+		"path":    abs,
 		"bytes":   len(content),
 		"success": true,
 	}, nil
@@ -552,11 +576,19 @@ func (t *SemanticSearchTool) Execute(ctx context.Context, args map[string]interf
 }
 
 func NewDefaultRegistry() *Registry {
+	return NewDefaultRegistryWithEnv(nil)
+}
+
+// NewDefaultRegistryWithEnv creates a registry with all default tools. When
+// env is non-nil, file-manipulation tools (ReadFileTool, WriteFileTool,
+// StrReplaceTool) resolve relative paths against env.WorkDir() instead of the
+// process CWD, enabling safe concurrent execution across multiple instances.
+func NewDefaultRegistryWithEnv(env WorkDirResolver) *Registry {
 	r := NewRegistry()
 	r.Register(&ShellTool{})
-	r.Register(&ReadFileTool{})
-	r.Register(&WriteFileTool{})
-	r.Register(&StrReplaceTool{})
+	r.Register(&ReadFileTool{Env: env})
+	r.Register(&WriteFileTool{Env: env})
+	r.Register(&StrReplaceTool{Env: env})
 	r.Register(&SearchCodeTool{})
 	r.Register(&GoToDefinitionTool{})
 	r.Register(&SemanticSearchTool{})
@@ -566,7 +598,10 @@ func NewDefaultRegistry() *Registry {
 	return r
 }
 // StrReplaceTool performs a surgical find-and-replace of a unique string in a file.
-type StrReplaceTool struct{}
+type StrReplaceTool struct {
+	// Env, when non-nil, resolves relative paths against Env.WorkDir().
+	Env WorkDirResolver
+}
 
 func (t *StrReplaceTool) Name() string { return "str_replace" }
 func (t *StrReplaceTool) Description() string {
@@ -593,23 +628,24 @@ func (t *StrReplaceTool) Execute(ctx context.Context, args map[string]interface{
 	if !ok {
 		return nil, fmt.Errorf("missing required argument: new_string")
 	}
-	data, err := os.ReadFile(path)
+	abs := resolveEnvPath(t.Env, path)
+	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, err
 	}
 	content := string(data)
 	if n := strings.Count(content, oldStr); n != 1 {
 		if n == 0 {
-			return nil, fmt.Errorf("old_string not found in %s", path)
+			return nil, fmt.Errorf("old_string not found in %s", abs)
 		}
-		return nil, fmt.Errorf("old_string appears %d times in %s; it must be unique", n, path)
+		return nil, fmt.Errorf("old_string appears %d times in %s; it must be unique", n, abs)
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(strings.Replace(content, oldStr, newStr, 1)), info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(abs, []byte(strings.Replace(content, oldStr, newStr, 1)), info.Mode().Perm()); err != nil {
 		return nil, err
 	}
-	return fmt.Sprintf("Replaced 1 occurrence in %s", path), nil
+	return fmt.Sprintf("Replaced 1 occurrence in %s", abs), nil
 }

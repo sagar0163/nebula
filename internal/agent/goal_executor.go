@@ -234,17 +234,10 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 // session, appending goal as a new user message (e.g. the latest test failure).
 // The returned session is always non-nil and can be passed back to resume.
 func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions, out io.Writer, session *GoalSession) (*GoalSession, error) {
-	tr := tools.NewRegistry()
-	tr.Register(&tools.ShellTool{})
-	tr.Register(&tools.ReadFileTool{})
-	tr.Register(&tools.WriteFileTool{})
-	tr.Register(&tools.StrReplaceTool{})
-	tr.Register(&tools.GrepTool{})
-	tr.Register(&tools.GitTool{})
-	tr.Register(&tools.DoneTool{})
-	if opts.TestCmd != "" {
-		tr.Register(&tools.RunTestsTool{TestCmd: opts.TestCmd})
-	}
+	// Use the shared default registry so tool definitions are not duplicated
+	// inline (issue #29). NewDefaultRegistry includes RunTestsTool when a test
+	// command is configured.
+	tr := tools.NewDefaultRegistry(opts.TestCmd)
 
 	var messages []llm.Message
 	editsMade := 0

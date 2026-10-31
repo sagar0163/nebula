@@ -124,11 +124,21 @@ func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
 	var b strings.Builder
 	b.WriteString("You are a senior engineer analyzing a GitHub issue.\n\n")
 	b.WriteString("Issue: " + input.Context + "\n\n")
-	
+
 	if input.Memory != nil && input.Memory.GlobalSummary != "" {
 		b.WriteString(input.Memory.GlobalSummary + "\n\n")
 	}
-	
+
+	// Include the shared tool registry so the planner knows which tools are
+	// available to downstream agents (issue #29).
+	if len(input.Tools) > 0 {
+		b.WriteString("Available tools for downstream agents:\n")
+		for _, t := range input.Tools {
+			b.WriteString(fmt.Sprintf("  - %s: %s\n", t.Name, t.Description))
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("Based on the issue and repository layout, identify the files that need to be read and edited.\n")
 	b.WriteString("Include any files you want examined in files_to_read.\n")
 	b.WriteString("Output your final JSON answer and nothing else, using exactly this schema:\n")
@@ -466,7 +476,7 @@ func extractJSON(text string) string {
 	
 	return ""
 }
-// CriticAgent reviews the quality of generated patches
+// CriticAgent reviews the quality of generated patches using deterministic checks.
 type CriticAgent struct {
 	router *llm.Router
 	model  shared.ModelConfig
@@ -480,8 +490,76 @@ func NewCriticAgent(router *llm.Router, model shared.ModelConfig) *CriticAgent {
 func (c *CriticAgent) Name() string { return "Critic" }
 func (c *CriticAgent) Phase() shared.Phase { return shared.PhaseCritique }
 
+// testFilePatterns are glob-style substrings that indicate a test file path.
+var testFilePatterns = []string{
+	"test_", "_test.py", "/tests/", "/testing/",
+}
+
+// debugArtifacts are line prefixes/substrings that indicate debug code left in.
+var debugArtifacts = []string{
+	"import pdb; pdb.set_trace()",
+	"breakpoint()",
+	`console.log(`,
+	`print(f"DEBUG`,
+}
+
+// DoCritique runs deterministic patch quality checks and returns (approved, reason).
+// It is exported so tests can call it directly without an Execute round-trip.
+func DoCritique(patch string) (approved bool, reason string) {
+	// Check 1: patch must be non-empty
+	diffLines := 0
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			diffLines++
+		}
+	}
+	if diffLines == 0 {
+		return false, "patch is empty: no diff lines found"
+	}
+
+	// Check 2: no test file modifications
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "diff --git") {
+			lower := strings.ToLower(line)
+			for _, pat := range testFilePatterns {
+				if strings.Contains(lower, pat) {
+					return false, fmt.Sprintf("patch modifies a test file (matched pattern %q in: %s)", pat, line)
+				}
+			}
+		}
+	}
+
+	// Check 3: no binary file changes
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.Contains(line, "Binary files") && strings.Contains(line, "differ") {
+			return false, fmt.Sprintf("patch modifies a binary file: %s", line)
+		}
+	}
+
+	// Check 4: warn (but don't reject) if patch is >500 lines
+	warnings := []string{}
+	totalLines := len(strings.Split(patch, "\n"))
+	if totalLines > 500 {
+		warnings = append(warnings, fmt.Sprintf("patch is large (%d lines); review carefully", totalLines))
+	}
+
+	// Check 5: no debug artifacts in added lines
+	for _, line := range strings.Split(patch, "\n") {
+		if !strings.HasPrefix(line, "+") || strings.HasPrefix(line, "+++") {
+			continue
+		}
+		for _, artifact := range debugArtifacts {
+			if strings.Contains(line, artifact) {
+				return false, fmt.Sprintf("patch adds debug artifact %q", artifact)
+			}
+		}
+	}
+
+	return true, strings.Join(warnings, "; ")
+}
+
 func (c *CriticAgent) Execute(ctx context.Context, input shared.AgentInput) (shared.AgentOutput, error) {
-	fmt.Println("[Critic] Reviewing patch quality...")
+	fmt.Println("[Critic] Reviewing patch quality (deterministic)...")
 
 	patch := input.Context
 	if patch == "" || patch == "No changes were made." {
@@ -491,50 +569,19 @@ func (c *CriticAgent) Execute(ctx context.Context, input shared.AgentInput) (sha
 		}, nil
 	}
 
-	prompt := fmt.Sprintf(`Review the following git diff patch for correctness, style, and minimality.
-Flag any test file modifications, unrelated changes, or security issues.
-If there are severe security issues or completely unrelated destructive changes, reject the patch.
-Otherwise, approve it but provide warnings.
+	approved, reason := DoCritique(patch)
 
-Patch:
-%s
-
-Do not call any tools. Output your final JSON answer only, in this format:
-{
-  "approved": true/false,
-  "warnings": ["warning 1", "warning 2"]
-}`, patch)
-
-	req := llm.Request{
-		Messages:       []llm.Message{{Role: "user", Content: prompt}},
-		MaxTokens:      c.model.MaxTokens,
-		Temperature:    c.model.Temperature,
-		ResponseFormat: "json",
+	warnings := []string{}
+	if reason != "" {
+		warnings = append(warnings, reason)
 	}
+	warningsJSON, _ := json.Marshal(warnings)
+	resp := fmt.Sprintf(`{"approved": %v, "warnings": %s}`, approved, string(warningsJSON))
 
-	ch, err := c.router.CompleteWithConfig(ctx, llm.ModelConfig{Provider: c.model.Provider, Model: c.model.Model}, llm.WorkloadDiagnose, req)
-	if err != nil {
-		return shared.AgentOutput{}, err
-	}
-
-	var respBuilder strings.Builder
-	for t := range ch {
-		if t.Err != nil {
-			return shared.AgentOutput{}, t.Err
-		}
-		respBuilder.WriteString(t.Text)
-	}
-	resp := extractJSON(respBuilder.String())
-
-	// Ensure it parses
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
-		fmt.Printf("[Critic] Failed to parse response: %v\n", err)
-		// Default to approve on parsing failure so we don't block good code
-		return shared.AgentOutput{
-			Context: `{"approved": true, "warnings": ["Failed to parse critic output"]}`,
-			Done:    true,
-		}, nil
+	if approved {
+		fmt.Printf("[Critic] Patch approved. Warnings: %v\n", warnings)
+	} else {
+		fmt.Printf("[Critic] Patch rejected: %s\n", reason)
 	}
 
 	return shared.AgentOutput{

@@ -131,6 +131,12 @@ func (p *GroqProvider) Model(w llm.Workload) string {
 }
 
 // buildOpenAIMessages converts llm.Request messages to openai-go param slice.
+// It handles the full OpenAI-compatible message schema:
+//   - role "system"    → SystemMessage
+//   - role "user"      → UserMessage (plain text)
+//   - role "assistant" → AssistantMessage; if ToolCalls is non-empty the
+//                        tool_calls array is populated with function call info
+//   - role "tool"      → ToolMessage carrying tool_call_id and the result text
 func buildOpenAIMessages(req llm.Request) []openai.ChatCompletionMessageParamUnion {
 	var msgs []openai.ChatCompletionMessageParamUnion
 	if req.SystemPrompt != "" {
@@ -139,7 +145,49 @@ func buildOpenAIMessages(req llm.Request) []openai.ChatCompletionMessageParamUni
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "assistant":
-			msgs = append(msgs, openai.AssistantMessage(m.Content))
+			if len(m.ToolCalls) > 0 {
+				// Build a native assistant message with tool_calls populated.
+				var tcs []openai.ChatCompletionMessageToolCallParam
+				for _, tc := range m.ToolCalls {
+					name := tc.Function.Name
+					args := tc.Function.Arguments
+					// Fall back to deprecated flat fields for backward compat.
+					if name == "" {
+						name = tc.Name
+					}
+					if args == "" {
+						args = tc.Arguments
+					}
+					tcs = append(tcs, openai.ChatCompletionMessageToolCallParam{
+						ID:   tc.ID,
+						Type: "function",
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      name,
+							Arguments: args,
+						},
+					})
+				}
+				param := openai.ChatCompletionAssistantMessageParam{
+					Role:      "assistant",
+					Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfString: openai.String(m.Content)},
+					ToolCalls: tcs,
+				}
+				msgs = append(msgs, openai.ChatCompletionMessageParamUnion{OfAssistant: &param})
+			} else {
+				msgs = append(msgs, openai.AssistantMessage(m.Content))
+			}
+		case "tool":
+			// Tool-result message: role "tool" with tool_call_id.
+			name := m.Name
+			if name == "" {
+				name = "tool"
+			}
+			param := openai.ChatCompletionToolMessageParam{
+				Role:       "tool",
+				ToolCallID: m.ToolCallID,
+				Content:    openai.ChatCompletionToolMessageParamContentUnion{OfString: openai.String(m.Content)},
+			}
+			msgs = append(msgs, openai.ChatCompletionMessageParamUnion{OfTool: &param})
 		default:
 			msgs = append(msgs, openai.UserMessage(m.Content))
 		}

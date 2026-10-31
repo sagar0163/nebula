@@ -17,11 +17,21 @@ type PatchResult struct {
 	Error    string
 }
 
-// GeneratePatch creates a validated unified diff from the working directory
-func GeneratePatch(ctx context.Context, workDir string) (*PatchResult, error) {
+// GeneratePatch creates a validated unified diff from the working directory.
+// excludePaths lists files (relative to workDir) that should not appear in the
+// patch — typically test files added by the SWE-bench test_patch.
+func GeneratePatch(ctx context.Context, workDir string, excludePaths ...string) (*PatchResult, error) {
 	// 1. Get git diff. Stage everything (incl. new untracked files, issue #40)
 	// so the diff captures them, then unstage to leave the index untouched.
 	exec.CommandContext(ctx, "git", "-C", workDir, "add", "-A", "--", ".", ":(exclude).nebula").Run()
+
+	// Unstage any test-patch files so they are excluded from the submitted diff
+	// (issue #37: test patch files must not appear in the generated patch).
+	if len(excludePaths) > 0 {
+		args := append([]string{"-C", workDir, "restore", "--staged", "--"}, excludePaths...)
+		exec.CommandContext(ctx, "git", args...).Run()
+	}
+
 	cmd := exec.CommandContext(ctx, "git", "-C", workDir, "diff", "--cached", "--no-color")
 	out, err := cmd.Output()
 	exec.CommandContext(ctx, "git", "-C", workDir, "reset", "-q").Run()

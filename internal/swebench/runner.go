@@ -260,7 +260,7 @@ func (r *Runner) runInstance(ctx context.Context, inst *Instance) *Result {
 		fmt.Printf("DEBUG: Git diff before extractPatch: %s\n", string(out))
 	}
 
-	patch := r.extractPatch(runCtx, workDir)
+	patch := r.extractPatch(runCtx, workDir, inst.TestPatch)
 	fmt.Printf("DEBUG: Extracted patch: %q\n", patch)
 	result.GeneratedPatch = patch
 
@@ -302,11 +302,27 @@ func (r *Runner) buildGoal(inst *Instance) string {
 	return b.String()
 }
 
+// parseTestPatchFiles returns the list of files touched by a unified diff
+// (lines starting with "+++ b/").
+func parseTestPatchFiles(patch string) []string {
+	var files []string
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "+++ b/") {
+			f := strings.TrimPrefix(line, "+++ b/")
+			if f != "" && f != "/dev/null" {
+				files = append(files, f)
+			}
+		}
+	}
+	return files
+}
+
 // extractPatch extracts a unified diff from the agent's output.
 // Uses the new robust patch generation.
-func (r *Runner) extractPatch(ctx context.Context, workDir string) string {
+func (r *Runner) extractPatch(ctx context.Context, workDir string, testPatch string) string {
 	fmt.Printf("DEBUG: extractPatch called for workDir: %s\n", workDir)
-	patchResult, err := GeneratePatch(ctx, workDir)
+	excludePaths := parseTestPatchFiles(testPatch)
+	patchResult, err := GeneratePatch(ctx, workDir, excludePaths...)
 	fmt.Printf("DEBUG: GeneratePatch returned err=%v, patchResult=%+v\n", err, patchResult)
 	if err != nil {
 		fmt.Printf("DEBUG: GeneratePatch error: %v\n", err)

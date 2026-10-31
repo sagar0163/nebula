@@ -362,6 +362,26 @@ except SyntaxError as e:
 	return "", false
 }
 
+// NewDefaultRegistry builds the standard tool registry used by the goal
+// executor. testCmd is optional; when non-empty, a RunTestsTool is included so
+// the model can verify its own fixes. Centralising this here means
+// DoGoalSession and any other caller pull from the shared registry rather than
+// duplicating the list of registrations.
+func NewDefaultRegistry(testCmd string) *Registry {
+	r := NewRegistry()
+	r.Register(&ShellTool{})
+	r.Register(&ReadFileTool{})
+	r.Register(&WriteFileTool{})
+	r.Register(&StrReplaceTool{})
+	r.Register(&GrepTool{})
+	r.Register(&GitTool{})
+	r.Register(&DoneTool{})
+	if testCmd != "" {
+		r.Register(&RunTestsTool{TestCmd: testCmd})
+	}
+	return r
+}
+
 // RunTestsTool runs a pre-configured test command so the model can verify its
 // fix inside the goal loop.
 type RunTestsTool struct {

@@ -12,16 +12,19 @@ func TestTrimMessages(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		msgs = append(msgs,
 			llm.Message{Role: "assistant", Content: `thinking {"steps":[{"tool":"ReadFileTool","input":{"path":"a.py"}}]}`},
-			llm.Message{Role: "user", Content: strings.Repeat("x", 3000)})
+			llm.Message{Role: "user", Content: "Tool result for ReadFileTool (step 1/40):\n" + strings.Repeat("x", 3000)})
 	}
 	got := trimMessages(msgs, 60000, 40000)
-	if historySize(got) > 45000 || !strings.HasPrefix(got[0].Content, "GOAL") || !strings.Contains(got[0].Content, "ReadFileTool") {
-		t.Fatalf("bad trim: size=%d first=%.80q", historySize(got), got[0].Content)
+	if historySize(got) > 45000 || !strings.HasPrefix(got[0].Content, "GOAL") || len(got) != len(msgs) || got[1].Content != "[Tool result for ReadFileTool(a.py) — elided]" && got[2].Content != "[Tool result for ReadFileTool(a.py) — elided]" {
+		t.Fatalf("bad trim: size=%d second=%.80q", historySize(got), got[2].Content)
 	}
 	for i, m := range got {
 		want := "user"
 		if i%2 == 1 {
 			want = "assistant"
+		}
+		if i%2 == 1 && m.Content != msgs[i].Content {
+			t.Fatalf("assistant message %d was modified", i)
 		}
 		if m.Role != want {
 			t.Fatalf("role alternation broken at %d", i)

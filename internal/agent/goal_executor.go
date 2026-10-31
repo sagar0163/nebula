@@ -83,7 +83,7 @@ PROTOCOL:
 HOW TO FIX A BUG:
 1. Locate the relevant file (GrepTool, or ShellTool with grep -n / find).
 2. ALWAYS call ReadFileTool on the file before editing so you see the exact current code (indentation included). Tool results are truncated to ~%d chars, so for large files find the line with "grep -n" and pass "start_line"/"end_line" to ReadFileTool.
-3. Apply the fix with StrReplaceTool using input keys "path", "old_string" (exact current code, verbatim, unique in the file) and "new_string" (replacement with correct indentation).
+3. Apply the fix with StrReplaceTool using input keys "path", "old_string" (exact current code, verbatim, unique in the file — strip ReadFileTool's "N: " line-number prefixes) and "new_string" (replacement with correct indentation).
    Example: {"steps": [{"tool": "StrReplaceTool", "input": {"path": "src/pkg/module.py", "old_string": "def is_valid(args):\n    return isinstance(args[0], Foo)", "new_string": "def is_valid(args):\n    if not args:\n        return False\n    return isinstance(args[0], Foo)"}}]}
 4. If StrReplaceTool returns an error (not found / not unique / syntax error), ReadFileTool again and retry with a corrected edit.
 5. Use WriteFileTool only for new files. Do not rewrite whole existing files.
@@ -102,45 +102,47 @@ func historySize(msgs []llm.Message) int {
 	return n
 }
 
-// trimMessages keeps the first (system/goal) message and the most recent
-// messages totalling at most keep chars once the history exceeds trigger.
-// Dropped turns are replaced by a short note listing the tools that were
-// called, so the conversation stays well-formed (user/assistant alternation).
+// trimMessages applies observation masking (issue #50): once the history
+// exceeds trigger chars, every "Tool result for ..." user message older than
+// the most recent keep chars is replaced by a one-line stub. The first
+// (goal) message and every assistant message (the reasoning chain) are kept
+// intact, so roles still alternate and earlier findings are not lost.
 func trimMessages(msgs []llm.Message, trigger, keep int) []llm.Message {
 	if len(msgs) < 4 || historySize(msgs) <= trigger {
 		return msgs
 	}
-	// Walk back from the end, keeping whole messages until the budget is used.
+	// Find where the protected recent tail begins.
 	size, cut := 0, len(msgs)
 	for cut > 1 && size+len(msgs[cut-1].Content) <= keep {
 		size += len(msgs[cut-1].Content)
 		cut--
 	}
-	// The kept tail must begin with an assistant message so that, after the
-	// summary (a user message), roles still alternate.
-	for cut < len(msgs) && msgs[cut].Role != "assistant" {
-		cut++
-	}
-	if cut <= 2 || cut >= len(msgs) {
-		return msgs
-	}
-	var summary strings.Builder
-	summary.WriteString("[Earlier conversation summarized to save space. Steps taken so far:]\n")
-	for _, m := range msgs[1:cut] {
-		if m.Role != "assistant" {
+	out := make([]llm.Message, len(msgs))
+	copy(out, msgs)
+	for i := 1; i < cut; i++ {
+		m := out[i]
+		if m.Role != "user" || !strings.HasPrefix(m.Content, "Tool result for ") {
 			continue
 		}
-		var plan models.GoalPlan
-		if json.Unmarshal([]byte(extractJSON(m.Content)), &plan) == nil && len(plan.Steps) > 0 {
-			fmt.Fprintf(&summary, "- %s%s\n", plan.Steps[0].Tool, summarizeArgs(plan.Steps[0].Input))
+		stub := "[Tool result elided]"
+		if i > 0 && out[i-1].Role == "assistant" {
+			var plan models.GoalPlan
+			if json.Unmarshal([]byte(extractJSON(out[i-1].Content)), &plan) == nil && len(plan.Steps) > 0 {
+				arg := ""
+				for _, k := range []string{"path", "pattern", "command"} {
+					if v, ok := plan.Steps[0].Input[k]; ok {
+						arg = fmt.Sprintf("%v", v)
+						if len(arg) > 80 {
+							arg = arg[:80] + "..."
+						}
+						break
+					}
+				}
+				stub = fmt.Sprintf("[Tool result for %s(%s) — elided]", plan.Steps[0].Tool, arg)
+			}
 		}
+		out[i] = llm.Message{Role: "user", Content: stub}
 	}
-	summary.WriteString("Re-read any file you need before editing it again.")
-	// Merge the summary into the first message so roles keep alternating:
-	// msgs[0] (user) -> tail starting with assistant.
-	out := make([]llm.Message, 0, len(msgs)-cut+1)
-	out = append(out, llm.Message{Role: "user", Content: msgs[0].Content + "\n\n" + summary.String()})
-	out = append(out, msgs[cut:]...)
 	return out
 }
 

@@ -56,7 +56,14 @@ const (
 
 // buildGoalSystemPrompt builds the first message of the executor conversation:
 // the goal (including any planning context), tool list and working rules.
-func buildGoalSystemPrompt(goal string, tr *tools.Registry) string {
+func buildGoalSystemPrompt(goal string, tr *tools.Registry, opts RunOptions) string {
+	testRules := ""
+	if opts.TestCmd != "" {
+		testRules = "\n\nTESTING:\nAfter making a fix with StrReplaceTool, you SHOULD call RunTestsTool to verify your fix works before calling DoneTool. If tests still fail, read the error output and make additional fixes."
+		if len(opts.FailingTests) > 0 {
+			testRules += "\nTests that must pass: " + strings.Join(opts.FailingTests, ", ")
+		}
+	}
 	return fmt.Sprintf(`You are an autonomous software engineer fixing a bug in the repository in the current working directory.
 
 Goal:
@@ -81,8 +88,8 @@ HOW TO FIX A BUG:
 5. Use WriteFileTool only for new files. Do not rewrite whole existing files.
 6. Optionally reproduce or run the relevant tests with ShellTool to check your fix.
 Do NOT modify test files; fix the source code so the failing tests pass. If an error trace is given, fix the exact line it points at.
-Call DoneTool ONLY after StrReplaceTool or WriteFileTool has successfully changed a file: {"steps": [{"tool": "DoneTool", "input": {"reason": "..."}}]}`,
-		goal, tr.FormatPrompt(), maxToolResultChars)
+Call DoneTool ONLY after StrReplaceTool or WriteFileTool has successfully changed a file: {"steps": [{"tool": "DoneTool", "input": {"reason": "..."}}]}%s`,
+		goal, tr.FormatPrompt(), maxToolResultChars, testRules)
 }
 
 // historySize returns the total content length of messages.
@@ -186,9 +193,26 @@ func (a *Agent) nextStep(ctx context.Context, messages []llm.Message) (string, *
 	return "", nil, fmt.Errorf("LLM request failed after retries: %w", lastErr)
 }
 
-// DoGoal runs a ReAct loop as a single persistent conversation: the model
-// sees its own earlier reasoning and every tool result, one step per turn.
+// GoalSession is a resumable executor conversation. Passing it back to
+// DoGoalSession continues the same conversation, so a retry keeps full memory
+// of what earlier attempts did and why.
+type GoalSession struct {
+	Messages  []llm.Message
+	EditsMade int
+}
+
+// DoGoal runs a fresh goal session (backward-compatible wrapper).
 func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io.Writer) error {
+	_, err := a.DoGoalSession(ctx, goal, opts, out, nil)
+	return err
+}
+
+// DoGoalSession runs a ReAct loop as a single persistent conversation: the
+// model sees its own earlier reasoning and every tool result, one step per
+// turn. If session is nil it starts fresh using goal; otherwise it resumes the
+// session, appending goal as a new user message (e.g. the latest test failure).
+// The returned session is always non-nil and can be passed back to resume.
+func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions, out io.Writer, session *GoalSession) (*GoalSession, error) {
 	tr := tools.NewRegistry()
 	tr.Register(&tools.ShellTool{})
 	tr.Register(&tools.ReadFileTool{})
@@ -197,25 +221,48 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 	tr.Register(&tools.GrepTool{})
 	tr.Register(&tools.GitTool{})
 	tr.Register(&tools.DoneTool{})
+	if opts.TestCmd != "" {
+		tr.Register(&tools.RunTestsTool{TestCmd: opts.TestCmd})
+	}
 
-	messages := []llm.Message{{Role: "user", Content: buildGoalSystemPrompt(goal, tr)}}
+	var messages []llm.Message
 	editsMade := 0
+	if session == nil || len(session.Messages) == 0 {
+		messages = []llm.Message{{Role: "user", Content: buildGoalSystemPrompt(goal, tr, opts)}}
+	} else {
+		messages = append([]llm.Message(nil), session.Messages...)
+		editsMade = session.EditsMade
+		// Keep user/assistant alternation: merge into a trailing user message.
+		if last := &messages[len(messages)-1]; last.Role == "user" {
+			last.Content += "\n\n" + goal
+		} else {
+			messages = append(messages, llm.Message{Role: "user", Content: goal})
+		}
+	}
+	sess := &GoalSession{}
+	save := func() *GoalSession {
+		sess.Messages, sess.EditsMade = messages, editsMade
+		return sess
+	}
 	parseFailures := 0
+	// On resume the model already made edits; still require a new step
+	// before DoneTool so it can't immediately quit.
+	stepsThisRun := 0
 
 	for i := 0; i < maxGoalIterations; i++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return save(), err
 		}
 		messages = trimMessages(messages, historyTrimTrigger, historyKeepChars)
 
 		resp, step, err := a.nextStep(ctx, messages)
 		if step == nil {
 			if resp == "" {
-				return err // transport failure
+				return save(), err // transport failure
 			}
 			parseFailures++
 			if parseFailures > 5 {
-				return fmt.Errorf("model failed to produce a valid step %d times: %w", parseFailures, err)
+				return save(), fmt.Errorf("model failed to produce a valid step %d times: %w", parseFailures, err)
 			}
 			fmt.Fprintf(out, "[step %d/%d] unparseable reply: %v\n", i+1, maxGoalIterations, err)
 			messages = append(messages,
@@ -224,11 +271,17 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 			continue
 		}
 		messages = append(messages, llm.Message{Role: "assistant", Content: resp})
+		stepsThisRun++
 
 		fmt.Fprintf(out, "[step %d/%d] Executing %s:%s\n", i+1, maxGoalIterations, step.Tool, summarizeArgs(step.Input))
 		strInput := toStringMap(step.Input)
 
 		if step.Tool == "DoneTool" {
+			if session != nil && stepsThisRun == 1 {
+				fmt.Fprintln(out, "  -> DoneTool rejected: resumed session must act on the new failure first")
+				messages = append(messages, llm.Message{Role: "user", Content: "DoneTool REJECTED - the tests still fail with your current patch. Read the failure above, inspect the code, and fix it (then run the tests if RunTestsTool is available)."})
+				continue
+			}
 			if editsMade == 0 && i < 3 {
 				// Only block early exits; later DoneTool calls are allowed so the
 				// model can't burn every iteration on rejected DoneTool calls.
@@ -240,7 +293,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 				fmt.Fprintln(out, "  -> Warning: DoneTool accepted with no file modifications")
 			}
 			fmt.Fprintln(out, "Goal achieved:", strInput["reason"])
-			return nil
+			return save(), nil
 		}
 
 		var outStr string
@@ -250,7 +303,7 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 		} else {
 			if step.Tool == "ShellTool" && opts.ApprovalFn != nil && !opts.SkipPermissions {
 				if !opts.ApprovalFn(strInput["command"], 0) {
-					return fmt.Errorf("user rejected command: %s", strInput["command"])
+					return save(), fmt.Errorf("user rejected command: %s", strInput["command"])
 				}
 			}
 			outStr, toolErr = t.Execute(ctx, strInput)
@@ -275,5 +328,5 @@ func (a *Agent) DoGoal(ctx context.Context, goal string, opts RunOptions, out io
 	}
 
 	fmt.Fprintf(out, "Reached iteration limit (%d) without DoneTool.\n", maxGoalIterations)
-	return nil
+	return save(), nil
 }

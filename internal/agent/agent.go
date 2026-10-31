@@ -327,6 +327,10 @@ type RunOptions struct {
 	// ApprovalFn is called when user confirmation is needed.
 	// Returns true if the user approved.
 	ApprovalFn func(cmd string, risk safety.Risk) bool
+	// TestCmd, when set, registers RunTestsTool in DoGoal so the model can
+	// run the failing tests itself and iterate on its fix.
+	TestCmd      string
+	FailingTests []string
 }
 
 

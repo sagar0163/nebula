@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ShellTool struct{}
@@ -227,4 +228,40 @@ except SyntaxError as e:
 		return strings.TrimSpace(string(out)), true
 	}
 	return "", false
+}
+
+// RunTestsTool runs a pre-configured test command so the model can verify its
+// fix inside the goal loop.
+type RunTestsTool struct {
+	TestCmd string // e.g. "python -m pytest -x tests/test_foo.py"
+}
+
+const runTestsMaxOutput = 6000
+
+func (t *RunTestsTool) Name() string { return "RunTestsTool" }
+func (t *RunTestsTool) Description() string {
+	return "Runs the failing tests for this task and returns their output (pass/fail, assertion errors, tracebacks). Takes no input; pass {}."
+}
+func (t *RunTestsTool) Parameters() map[string]string { return map[string]string{} }
+func (t *RunTestsTool) Execute(ctx context.Context, input map[string]string) (string, error) {
+	if t.TestCmd == "" {
+		return "", fmt.Errorf("no test command configured")
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(runCtx, "sh", "-c", t.TestCmd).CombinedOutput()
+	s := string(out)
+	// Test summaries and tracebacks are at the end; keep the tail.
+	if len(s) > runTestsMaxOutput {
+		s = "...(truncated)...\n" + s[len(s)-runTestsMaxOutput:]
+	}
+	status := "TESTS PASSED"
+	if runCtx.Err() == context.DeadlineExceeded {
+		status = "TESTS TIMED OUT after 60s"
+	} else if err != nil {
+		status = fmt.Sprintf("TESTS FAILED (%v)", err)
+	}
+	// Report failures in the output rather than as a tool error so the model
+	// reads the traceback instead of treating the call as broken.
+	return fmt.Sprintf("$ %s\n%s\n%s", t.TestCmd, status, s), nil
 }

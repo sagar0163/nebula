@@ -16,6 +16,7 @@ import (
 	"github.com/sagar0163/nebula/internal/harness/tools"
 	"github.com/sagar0163/nebula/internal/llm"
 	"github.com/sagar0163/nebula/internal/swebench/localize"
+	"github.com/sagar0163/nebula/internal/swebench/testrunner"
 	import_mem "github.com/sagar0163/nebula/internal/memory"
 )
 
@@ -204,10 +205,17 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	execContextStr := planOutput.Context
 	resolved := false
 	prevPatch := ""
+	lastTrace := ""
+	testCmd := testrunner.BuildTestCommand(workDir, o.failingTests)
+	if testCmd != "" {
+		fmt.Printf("Executor test command: %s\n", testCmd)
+	}
+	o.executor.ResetSession()
 	
 	for attempt := 1; attempt <= 3; attempt++ {
 		fmt.Printf("=== PHASE 2: EXECUTION (Attempt %d) ===\n", attempt)
 		goal := o.issue + "\n\nPlanning context:\n" + execContextStr
+		resume := false
 		if attempt > 1 {
 			trimmed := strings.TrimSpace(prevPatch)
 			if trimmed == "" || trimmed == "No changes were made." {
@@ -220,6 +228,14 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 					}
 				}
 				goal = o.issue + "\n\nPrevious attempt made no changes. Start fresh and find the right file to fix.\n" + execContextStr
+				o.executor.ResetSession()
+			} else if o.executor.LastSession() != nil && !o.MultiModel {
+				// Resume the same conversation so the model remembers why it
+				// made its earlier edits; only the new failure is appended.
+				fmt.Println("Resuming executor conversation with the new error trace.")
+				resume = true
+				goal = "The previous attempt produced a patch but tests still failed. Error:\n" + lastTrace +
+					"\n\nContinue fixing. The patch you already applied is still in place — build on it or correct it."
 			} else {
 				// Previous attempt made changes that didn't pass: keep them and refine.
 				fmt.Println("Keeping previous attempt's changes; asking executor to refine them.")
@@ -229,7 +245,13 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			}
 		}
 		execCtx := o.buildExecutionContext(execContextStr)
-		execCtx.Metadata = map[string]interface{}{"workDir": workDir, "goal": goal}
+		execCtx.Metadata = map[string]interface{}{
+			"workDir":      workDir,
+			"goal":         goal,
+			"testCmd":      testCmd,
+			"failingTests": o.failingTests,
+			"resume":       resume,
+		}
 		
 		execStart := time.Now()
 		var execOutput shared.AgentOutput
@@ -355,6 +377,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 					fmt.Println(">> Critic rejected the patch due to security or destructive changes.")
 					resolved = false
 					execContextStr = fmt.Sprintf("Critic rejected your patch. Warnings:\n%v\nPlease fix.", criticRes["warnings"])
+					lastTrace = execContextStr
 					continue // Loop back to Executor
 				}
 				fmt.Println(">> Critic approved the patch.")
@@ -383,6 +406,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			}
 			fmt.Printf(">> Error trace (%d chars):\n%s\n", len(trace), trace)
 			fmt.Printf(">> Tests failed on attempt %d. Feeding error trace back to Executor.\n", attempt)
+			lastTrace = trace
 			execContextStr = fmt.Sprintf("Previous patch failed tests. Error trace:\n%s\nPlease fix the errors.", trace)
 		}
 	}

@@ -80,7 +80,7 @@ func (p *PlannerAgent) Execute(ctx context.Context, input shared.AgentInput) (sh
 		toolCalls = append(toolCalls, shared.ToolCall{
 			ID:        fmt.Sprintf("plan_edit_%d", i),
 			Name:      "edit_file",
-			Arguments: map[string]interface{}{"path": f, "approach": plan.Approach},
+			Arguments: map[string]interface{}{"path": f, "approach": plan.ApproachString()},
 			RequestID: fmt.Sprintf("plan_edit_%d", i),
 		})
 	}
@@ -103,7 +103,22 @@ type Plan struct {
 	FilesToRead  []string `json:"files_to_read"`
 	FilesToEdit  []string `json:"files_to_edit"`
 	FailingTests []string `json:"failing_tests"`
-	Approach     string   `json:"approach"`
+	// Approach is RawMessage because LLMs sometimes return an object instead
+	// of a plain string; use ApproachString to read it.
+	Approach json.RawMessage `json:"approach"`
+}
+
+// ApproachString returns the approach as plain text whether the LLM sent a
+// JSON string or an object.
+func (p Plan) ApproachString() string {
+	if len(p.Approach) == 0 {
+		return ""
+	}
+	var approachStr string
+	if err := json.Unmarshal(p.Approach, &approachStr); err != nil {
+		approachStr = string(p.Approach)
+	}
+	return approachStr
 }
 
 func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
@@ -124,6 +139,7 @@ func (p *PlannerAgent) buildPrompt(input shared.AgentInput) string {
   "failing_tests": ["tests/test_bug.py"],
   "approach": "Brief summary of how to fix the issue"
 }`)
+	b.WriteString("\n\"approach\" must be a plain JSON string, not an object or array.\n")
 
 	return b.String()
 }

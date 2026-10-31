@@ -342,6 +342,23 @@ func (r *Router) selectCandidates(ctx context.Context, w Workload, limit int) []
 	if len(out) == 0 {
 		out = cooling
 	}
+	// Groq's free tier has a ~6k-token request cap, so for large-context
+	// code workloads it is only a last-resort fallback, never first choice.
+	if w == WorkloadHeal || w == WorkloadDiagnose {
+		var rest, groq []Provider
+		for _, p := range out {
+			if p.Name() == "groq" {
+				groq = append(groq, p)
+			} else {
+				rest = append(rest, p)
+			}
+		}
+		if len(rest) > 0 {
+			out = rest
+		} else {
+			out = groq
+		}
+	}
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -397,7 +414,10 @@ func isRL(msg string) bool {
 	return strings.Contains(msg, "429") ||
 		strings.Contains(msg, "rate limit") ||
 		strings.Contains(msg, "too many requests") ||
-		strings.Contains(msg, "quota exceeded")
+		strings.Contains(msg, "quota exceeded") ||
+		// Groq rejects JSON-mode replies that look like tool calls; another
+		// provider usually handles the same request fine.
+		strings.Contains(msg, "tool choice is none")
 }
 
 // Model returns the model the best available provider for the workload would

@@ -23,6 +23,10 @@ func NewGoalPlanner(router *llm.Router, tr *tools.Registry) *GoalPlanner {
 }
 
 func (p *GoalPlanner) Plan(ctx context.Context, goal string, contextData string, user profile.UserProfile, proj profile.ProjectProfile) ([]models.GoalStep, error) {
+	// Keep the most recent context; small-context providers reject huge prompts (413).
+	if len(contextData) > 8000 {
+		contextData = "...(earlier context truncated)...\n" + contextData[len(contextData)-8000:]
+	}
 	prompt := fmt.Sprintf(`Goal: %s
 
 Context:
@@ -41,7 +45,8 @@ Return ONLY a JSON object with this exact structure, containing exactly one step
 
 Each step's "input" must be an object with string keys and string values matching the tool's parameters.
 Prefer StrReplaceTool for edits (old_string must match the file exactly and be unique) instead of rewriting whole files.
-Only use DoneTool (input: {"reason": "..."}) once the goal is genuinely accomplished and verified - never as the first step.
+Only when the goal is genuinely accomplished and verified (never as the first step), output {"steps": [{"tool": "DoneTool", "input": {"reason": "..."}}]} in your JSON.
+The "tool" field is just a string in your JSON reply - do not make native function/tool calls.
 
 Do not include any explanation, markdown, or text outside the JSON.`, goal, contextData, p.tools.FormatPrompt())
 

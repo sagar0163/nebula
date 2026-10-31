@@ -593,21 +593,36 @@ func newDoCmd() *cobra.Command {
 			// Use the new Multi-Agent Harness
 			router := buildRouter("", nil)
 			orchestrator := harness.NewOrchestrator(router, nil, nil)
-			
+
+			// Wire in SWE-bench test context when provided via flags.
+			failingTestsFlag, _ := cmd.Flags().GetString("failing-tests")
+			testPatchFlag, _ := cmd.Flags().GetString("test-patch")
+			if failingTestsFlag != "" || testPatchFlag != "" {
+				var tests []string
+				for _, t := range strings.Split(failingTestsFlag, "\n") {
+					if t = strings.TrimSpace(t); t != "" {
+						tests = append(tests, t)
+					}
+				}
+				orchestrator.SetTestContext(tests, testPatchFlag)
+			}
+
 			workDir, _ := os.Getwd()
 			goal := strings.Join(args, " ")
 			fmt.Printf("Starting multi-agent harness for goal: %s\n", goal)
-			
+
 			traj, err := orchestrator.Run(cmd.Context(), goal, workDir)
 			if err != nil {
 				return fmt.Errorf("harness failed: %w", err)
 			}
-			
+
 			fmt.Printf("Harness finished with status: %s (Steps: %d)\n", traj.Status, len(traj.Steps))
 			return nil
 		},
 	}
 	cmd.Flags().Bool("legacy", false, "Use the old single-pass goal executor instead of the multi-agent harness")
+	cmd.Flags().String("failing-tests", "", "Newline-separated list of failing test IDs to pass to the harness")
+	cmd.Flags().String("test-patch", "", "Unified diff test patch to apply before execution")
 	return cmd
 }
 

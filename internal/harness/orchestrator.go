@@ -183,10 +183,10 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 		// Try to extract from issue text early so we can pre-run
 		o.failingTests = extractFailingTests(o.issue)
 	}
-	if preRunHints := o.runPreTestLocalization(ctx, workDir); preRunHints != "" {
-		locHints += preRunHints
-		issue += preRunHints
-	}
+	// Pre-run localization disabled: testrunner.BuildTestCommand builds a
+	// conda-wrapped command that hangs when conda is not in PATH inside the
+	// executor process. Use locHints from the issue text (above) instead.
+	// TODO(#55): re-enable once we use o.testCmd (the explicit --test-cmd flag).
 
 	planCtx := o.buildPlanningContext(issue, workDir)
 	planOutput, err := o.planner.Execute(ctx, planCtx)

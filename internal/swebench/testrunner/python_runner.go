@@ -34,13 +34,17 @@ func (r *PythonTestRunner) Detect(workDir string) bool {
 	return foundPy
 }
 
-// GetTestCommand returns the pytest command
+// GetTestCommand returns the pytest command.
+// filter is a newline-separated list of test IDs. Each ID is passed as a
+// separate argument so IDs with spaces (e.g. Django-style
+// "method (module.Class)") are not split incorrectly.
 func (r *PythonTestRunner) GetTestCommand(filter string) []string {
-	// Simple invocation, ignoring conda env for now unless injected externally
 	cmd := []string{"python", "-m", "pytest", "-x", "--tb=short", "-q"}
-	// Each test id is a separate argument (a single space-joined arg would be
-	// treated by pytest as one nonexistent path).
-	cmd = append(cmd, strings.Fields(filter)...)
+	for _, id := range strings.Split(filter, "\n") {
+		if t := strings.TrimSpace(id); t != "" {
+			cmd = append(cmd, t)
+		}
+	}
 	return cmd
 }
 

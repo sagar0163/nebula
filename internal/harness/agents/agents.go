@@ -465,20 +465,45 @@ func extractJSON(text string) string {
 			}
 		}
 	}
-	
-	// If already looks like JSON, return as-is
+
 	text = strings.TrimSpace(text)
-	if strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}") {
-		return text
-	}
-	
-	// Try to find JSON object in text (between first { and last })
+
+	// Use a bracket counter to find the first complete top-level JSON object.
+	// This avoids returning truncated JSON when there is text after the first
+	// object (e.g. "{"a":1} extra text {"b":2}").
 	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start >= 0 && end > start {
-		return text[start : end+1]
+	if start < 0 {
+		return ""
 	}
-	
+	depth := 0
+	inStr := false
+	escape := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if escape {
+			escape = false
+			continue
+		}
+		if ch == '\\' && inStr {
+			escape = true
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
 	return ""
 }
 // CriticAgent reviews the quality of generated patches using deterministic checks.
@@ -497,7 +522,7 @@ func (c *CriticAgent) Phase() shared.Phase { return shared.PhaseCritique }
 
 // testFilePatterns are glob-style substrings that indicate a test file path.
 var testFilePatterns = []string{
-	"test_", "_test.py", "/tests/", "/testing/",
+	"test_", "_test.py", "/tests/", "/testing/", "conftest.py",
 }
 
 // debugArtifacts are line prefixes/substrings that indicate debug code left in.

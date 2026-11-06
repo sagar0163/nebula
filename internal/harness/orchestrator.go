@@ -661,15 +661,15 @@ func (o *Orchestrator) buildRepoSummary(workDir string) string {
 		dirs += "\n... (truncated)"
 	}
 
-	// Detect basic languages by checking root files
+	// Detect basic languages by checking root files.
 	langs := ""
-	if _, err := exec.Command("ls", filepath.Join(workDir, "package.json")).Output(); err == nil {
+	if _, err := os.Stat(filepath.Join(workDir, "package.json")); err == nil {
 		langs += "JavaScript/Node.js detected. "
 	}
-	if _, err := exec.Command("ls", filepath.Join(workDir, "requirements.txt")).Output(); err == nil {
+	if _, err := os.Stat(filepath.Join(workDir, "requirements.txt")); err == nil {
 		langs += "Python detected. "
 	}
-	if _, err := exec.Command("ls", filepath.Join(workDir, "go.mod")).Output(); err == nil {
+	if _, err := os.Stat(filepath.Join(workDir, "go.mod")); err == nil {
 		langs += "Go detected. "
 	}
 
@@ -747,7 +747,8 @@ func deleteTrajectory(workDir string) error {
 }
 
 // applyTestPatch applies patch with `git apply --whitespace=fix` and returns
-// the files it touches.
+// the files it touches. The patch is written to a temp file to avoid issues
+// with stdin buffering and line-ending encoding (issue #17-fixes: corrupt patch).
 func applyTestPatch(ctx context.Context, workDir, patch string) ([]string, error) {
 	var files []string
 	for _, line := range strings.Split(patch, "\n") {
@@ -755,8 +756,20 @@ func applyTestPatch(ctx context.Context, workDir, patch string) ([]string, error
 			files = append(files, strings.TrimPrefix(line, "+++ b/"))
 		}
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", workDir, "apply", "--whitespace=fix", "-")
-	cmd.Stdin = strings.NewReader(patch)
+	// Write patch to a system temp file (not inside workDir) to avoid
+	// it appearing as an untracked file if the process is interrupted.
+	tmpf, err := os.CreateTemp("", "nebula-test-patch-*.patch")
+	if err != nil {
+		return nil, fmt.Errorf("create temp patch file: %v", err)
+	}
+	defer os.Remove(tmpf.Name())
+	if _, err := tmpf.WriteString(patch); err != nil {
+		tmpf.Close()
+		return nil, fmt.Errorf("write temp patch file: %v", err)
+	}
+	tmpf.Close()
+
+	cmd := exec.CommandContext(ctx, "git", "-C", workDir, "apply", "--whitespace=fix", tmpf.Name())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git apply: %v: %s", err, out)
 	}

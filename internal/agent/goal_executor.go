@@ -214,6 +214,53 @@ func (a *Agent) nextStep(ctx context.Context, messages []llm.Message, opts RunOp
 	return "", nil, fmt.Errorf("LLM request failed after retries: %w", lastErr)
 }
 
+// testsPassedOutput returns true when test output clearly indicates all tests
+// passed. It handles pytest ("N passed, 0 failed") and Django test runner ("OK").
+func testsPassedOutput(output string) bool {
+	if strings.TrimSpace(output) == "" {
+		return false
+	}
+	lower := strings.ToLower(output)
+	// Django test runner: last line is "OK"
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.TrimSpace(line) == "OK" {
+			return true
+		}
+	}
+	// Pytest: "N passed" with no failures
+	if strings.Contains(lower, "passed") && !strings.Contains(lower, " failed") && !strings.Contains(lower, " error") {
+		return true
+	}
+	return false
+}
+
+// testsFailedOutput returns true when test output clearly indicates test
+// failures. It returns false for empty output or timeout — only explicit
+// failure signals block DoneTool.
+func testsFailedOutput(output string) bool {
+	if strings.TrimSpace(output) == "" {
+		return false
+	}
+	lower := strings.ToLower(output)
+	// Timed-out runs should not block DoneTool.
+	if strings.Contains(lower, "timed out") {
+		return false
+	}
+	// Django: "FAILED" at end of output
+	if strings.Contains(lower, "\nfailed") || strings.HasSuffix(strings.TrimSpace(lower), "failed") {
+		return true
+	}
+	// Pytest: "N failed"
+	if strings.Contains(lower, " failed") {
+		return true
+	}
+	// Pytest ERROR
+	if strings.Contains(lower, " error") && strings.Contains(lower, "passed") {
+		return true
+	}
+	return false
+}
+
 // GoalSession is a resumable executor conversation. Passing it back to
 // DoGoalSession continues the same conversation, so a retry keeps full memory
 // of what earlier attempts did and why.
@@ -264,11 +311,11 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 	// On resume the model already made edits; still require a new step
 	// before DoneTool so it can't immediately quit.
 	stepsThisRun := 0
-	// testsConfirmedPassing tracks whether RunTestsTool has returned a passing
-	// result since the last edit. It is reset to false whenever a file edit is
-	// made (StrReplaceTool / WriteFileTool) so that a new round of tests is
-	// required after each change.
-	testsConfirmedPassing := false
+	// testsExplicitlyFailed is true when RunTestsTool returned a clear failure
+	// (not a timeout or empty output). It is reset to false on each new edit so
+	// the model must re-run tests after every change. DoneTool is blocked only
+	// when this is true (issue #17-fixes).
+	testsExplicitlyFailed := false
 
 	for i := 0; i < maxGoalIterations; i++ {
 		iterations = i + 1
@@ -311,9 +358,9 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 				messages = append(messages, llm.Message{Role: "user", Content: "DoneTool REJECTED - you have not modified any file yet. Use ReadFileTool to see the exact code, then StrReplaceTool to apply the fix before calling DoneTool."})
 				continue
 			}
-			if opts.TestCmd != "" && editsMade > 0 && !testsConfirmedPassing {
-				fmt.Fprintln(out, "  -> DoneTool rejected: tests have not been confirmed passing after last edit")
-				messages = append(messages, llm.Message{Role: "user", Content: "DoneTool REJECTED - you must run RunTestsTool and confirm all tests pass before calling DoneTool. Run the tests and fix any remaining failures."})
+			if opts.TestCmd != "" && editsMade > 0 && testsExplicitlyFailed {
+				fmt.Fprintln(out, "  -> DoneTool rejected: tests explicitly failed after last edit")
+				messages = append(messages, llm.Message{Role: "user", Content: "DoneTool REJECTED - the tests are still failing. Read the error output from RunTestsTool and fix the remaining failures before calling DoneTool."})
 				continue
 			}
 			if editsMade == 0 {
@@ -341,16 +388,10 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 			fmt.Fprintf(out, "  -> %s FAILED: %v\n", step.Tool, toolErr)
 		} else if step.Tool == "StrReplaceTool" || step.Tool == "WriteFileTool" {
 			editsMade++
-			testsConfirmedPassing = false // new edit invalidates prior test result
+			testsExplicitlyFailed = false  // reset: tests not yet run against new edit
 			fmt.Fprintf(out, "  -> %s OK: %s\n", step.Tool, strings.TrimSpace(outStr))
 		} else if step.Tool == "RunTestsTool" {
-			// Mark tests as passing only when output contains "passed" and no "failed"
-			lower := strings.ToLower(outStr)
-			if strings.Contains(lower, "passed") && !strings.Contains(lower, "failed") {
-				testsConfirmedPassing = true
-			} else {
-				testsConfirmedPassing = false
-			}
+			testsExplicitlyFailed = testsFailedOutput(outStr)
 		}
 
 		output := outStr

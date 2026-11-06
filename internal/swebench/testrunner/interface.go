@@ -22,7 +22,8 @@ func BuildTestCommand(workDir string, tests []string) string {
 	if len(tests) == 0 {
 		return ""
 	}
-	filter := strings.Join(tests, " ")
+	// Join with newline so each test ID is kept intact; GetTestCommand splits on "\n".
+	filter := strings.Join(tests, "\n")
 	var args []string
 	switch {
 	case (&PythonTestRunner{}).Detect(workDir):

@@ -65,11 +65,19 @@ func GeneratePatch(ctx context.Context, workDir string, excludePaths ...string) 
 
 // validatePatch checks if a patch can be cleanly applied
 func validatePatch(ctx context.Context, workDir, diff string) error {
-	// Write patch to temp file
-	patchFile := filepath.Join(workDir, ".swebench_patch.tmp")
-	if err := os.WriteFile(patchFile, []byte(diff), 0o644); err != nil {
+	// Write patch to a system temp file (not inside workDir) to avoid the temp
+	// file showing up as an untracked repo file if the process is interrupted.
+	tmpf, err := os.CreateTemp("", "nebula-validate-patch-*.patch")
+	if err != nil {
 		return err
 	}
+	patchFile := tmpf.Name()
+	if _, err := tmpf.WriteString(diff); err != nil {
+		tmpf.Close()
+		os.Remove(patchFile)
+		return err
+	}
+	tmpf.Close()
 	defer os.Remove(patchFile)
 
 	// Try to apply with --check (dry-run)

@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -43,7 +44,7 @@ func (p *GroqProvider) Available(ctx context.Context) bool {
 	if p == nil || p.cfg.APIKey == "" {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(ctx, 3_000_000_000) // 3s
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_, err := p.client.Models.List(ctx)
 	return err == nil
@@ -211,10 +212,16 @@ func applyResponseFormat(params *openai.ChatCompletionNewParams, req llm.Request
 func (p *GroqProvider) ModelName(w llm.Workload) string {
 	switch w {
 	case llm.WorkloadHeal:
-		return p.cfg.ModelHeal
+		if p.cfg.ModelHeal != "" {
+			return p.cfg.ModelHeal
+		}
 	case llm.WorkloadLearn:
-		return p.cfg.ModelLearn
-	default:
+		if p.cfg.ModelLearn != "" {
+			return p.cfg.ModelLearn
+		}
+	}
+	if p.cfg.ModelDiagnose != "" {
 		return p.cfg.ModelDiagnose
 	}
+	return "llama-3.3-70b-versatile"
 }

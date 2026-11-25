@@ -296,6 +296,7 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 			"goal":         goal,
 			"testCmd":      testCmd,
 			"failingTests": o.failingTests,
+			"testPatch":    o.testPatch,
 			"resume":       false,
 			"timeout":      perAttempt,
 		}

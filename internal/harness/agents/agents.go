@@ -239,6 +239,21 @@ func (e *ExecutorAgent) Execute(ctx context.Context, input shared.AgentInput) (s
 	// Stage everything (incl. new untracked files) so the diff captures them,
 	// then unstage so the index isn't left permanently modified.
 	exec.CommandContext(ctx, "git", "-C", workDir, "add", "-A", "--", ".", ":(exclude).nebula").Run()
+
+	// Unstage files introduced by the SWE-bench test_patch so they don't
+	// appear in the submitted patch and trigger a critic false-positive
+	// (issue #37: test patch files must not appear in the generated patch).
+	if tp, ok := input.Metadata["testPatch"].(string); ok && tp != "" {
+		for _, line := range strings.Split(tp, "\n") {
+			if strings.HasPrefix(line, "+++ b/") {
+				f := strings.TrimPrefix(line, "+++ b/")
+				if f != "" && f != "/dev/null" {
+					exec.CommandContext(ctx, "git", "-C", workDir, "restore", "--staged", "--", f).Run()
+				}
+			}
+		}
+	}
+
 	diffCmd := exec.CommandContext(ctx, "git", "-C", workDir, "diff", "--cached", "--no-color")
 	diffOut, diffErr := diffCmd.CombinedOutput()
 	exec.CommandContext(ctx, "git", "-C", workDir, "reset", "-q").Run()

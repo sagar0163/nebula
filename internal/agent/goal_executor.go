@@ -404,6 +404,11 @@ func (a *Agent) DoGoalSession(ctx context.Context, goal string, opts RunOptions,
 			fmt.Fprintf(out, "  -> %s OK: %s\n", step.Tool, strings.TrimSpace(outStr))
 		} else if step.Tool == "RunTestsTool" {
 			testsExplicitlyFailed = testsFailedOutput(outStr)
+			// If tests are now passing, inject a strong nudge so the model
+			// calls DoneTool instead of re-running tests in a loop (issue #run19).
+			if !testsExplicitlyFailed && testsPassedOutput(outStr) {
+				outStr += "\n\nALL TESTS PASSED. You MUST call DoneTool now to submit your fix. Do not run the tests again."
+			}
 		}
 
 		output := outStr

@@ -55,6 +55,14 @@ type Orchestrator struct {
 
 // SetTestContext supplies the FAIL_TO_PASS tests and the test patch for the
 // next Run. Either may be empty.
+// SetInstanceTimeout sets the wall-clock budget for the whole Run. Executor
+// attempts are sized to fit inside it. Non-positive values keep the default.
+func (o *Orchestrator) SetInstanceTimeout(d time.Duration) {
+	if d > 0 {
+		o.instanceTimeout = d
+	}
+}
+
 func (o *Orchestrator) SetTestContext(failingTests []string, testPatch string) {
 	o.failingTests = failingTests
 	o.testPatch = testPatch
@@ -132,10 +140,14 @@ func (o *Orchestrator) Run(ctx context.Context, issue string, workDir string) (*
 	}
 
 	// Apply the test patch so the failing tests exist; revert it on exit.
-	if o.testPatch != "" {
+	// If the caller already applied it (e.g. the SWE-bench driver), leave it
+	// in place and do not revert it: the caller owns that state.
+	if o.testPatch != "" && !testPatchApplied(ctx, workDir, o.testPatch) {
 		testFiles, err := applyTestPatch(ctx, workDir, o.testPatch)
 		if err != nil {
-			fmt.Printf("Warning: failed to apply test patch: %v\n", err)
+			// Fail fast: without the test patch the failing tests do not exist,
+			// so every later phase (reproduce-first, verify) is meaningless.
+			return traj, fmt.Errorf("apply test patch: %w", err)
 		} else if len(testFiles) > 0 {
 			defer revertFiles(workDir, testFiles)
 		}
@@ -746,10 +758,39 @@ func deleteTrajectory(workDir string) error {
 	return nil
 }
 
+// normalizePatch makes a unified diff safe for `git apply`. Patches passed via
+// CLI flags or shell command substitution (`$(cat f)`) lose their trailing
+// newline, which git rejects as "corrupt patch"; CRLF line endings from JSON
+// sources are also normalized.
+func normalizePatch(patch string) string {
+	patch = strings.ReplaceAll(patch, "\r\n", "\n")
+	if patch != "" && !strings.HasSuffix(patch, "\n") {
+		patch += "\n"
+	}
+	return patch
+}
+
+// testPatchApplied reports whether patch is already present in the working
+// tree, i.e. its reverse applies cleanly.
+func testPatchApplied(ctx context.Context, workDir, patch string) bool {
+	tmpf, err := os.CreateTemp("", "nebula-test-patch-check-*.patch")
+	if err != nil {
+		return false
+	}
+	defer os.Remove(tmpf.Name())
+	_, werr := tmpf.WriteString(normalizePatch(patch))
+	tmpf.Close()
+	if werr != nil {
+		return false
+	}
+	return exec.CommandContext(ctx, "git", "-C", workDir, "apply", "--reverse", "--check", tmpf.Name()).Run() == nil
+}
+
 // applyTestPatch applies patch with `git apply --whitespace=fix` and returns
 // the files it touches. The patch is written to a temp file to avoid issues
 // with stdin buffering and line-ending encoding (issue #17-fixes: corrupt patch).
 func applyTestPatch(ctx context.Context, workDir, patch string) ([]string, error) {
+	patch = normalizePatch(patch)
 	var files []string
 	for _, line := range strings.Split(patch, "\n") {
 		if strings.HasPrefix(line, "+++ b/") {

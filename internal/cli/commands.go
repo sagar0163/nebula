@@ -597,6 +597,9 @@ func newDoCmd() *cobra.Command {
 			// Wire in SWE-bench test context when provided via flags.
 			failingTestsFlag, _ := cmd.Flags().GetString("failing-tests")
 			testPatchFlag, _ := cmd.Flags().GetString("test-patch")
+			if d, _ := cmd.Flags().GetDuration("instance-timeout"); d > 0 {
+				orchestrator.SetInstanceTimeout(d)
+			}
 			if failingTestsFlag != "" || testPatchFlag != "" {
 				var tests []string
 				for _, t := range strings.Split(failingTestsFlag, "\n") {
@@ -617,11 +620,16 @@ func newDoCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Harness finished with status: %s (Steps: %d)\n", traj.Status, len(traj.Steps))
+			if traj.Status != "resolved" {
+				// Non-zero exit so scripts/CI cannot mistake an unresolved run for success.
+				return fmt.Errorf("harness did not resolve the issue (status: %s)", traj.Status)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().Bool("legacy", false, "Use the old single-pass goal executor instead of the multi-agent harness")
 	cmd.Flags().String("failing-tests", "", "Newline-separated list of failing test IDs to pass to the harness")
+	cmd.Flags().Duration("instance-timeout", 0, "Wall-clock budget for the whole harness run (default 25m); attempts are sized to fit")
 	cmd.Flags().String("test-patch", "", "Unified diff test patch to apply before execution")
 	return cmd
 }

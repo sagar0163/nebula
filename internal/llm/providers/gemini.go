@@ -3,10 +3,10 @@ package providers
 import (
 	"context"
 	"fmt"
+	"io"
 
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 	"github.com/sagar0163/nebula/internal/llm"
-	"google.golang.org/api/option"
 )
 
 // GeminiConfig holds configuration for the Gemini provider.
@@ -20,15 +20,23 @@ type GeminiConfig struct {
 
 // GeminiProvider implements llm.Provider using Google Gemini.
 type GeminiProvider struct {
-	cfg GeminiConfig
+	cfg    GeminiConfig
+	client *genai.Client
 }
 
 // NewGemini creates a GeminiProvider. Returns nil if APIKey is empty.
-func NewGemini(cfg GeminiConfig) *GeminiProvider {
+func NewGemini(ctx context.Context, cfg GeminiConfig) (*GeminiProvider, error) {
 	if cfg.APIKey == "" {
-		return nil
+		return nil, nil
 	}
-	return &GeminiProvider{cfg: cfg}
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  cfg.APIKey,
+		Backend: genai.BackendGeminiAPI,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gemini: create client: %w", err)
+	}
+	return &GeminiProvider{cfg: cfg, client: client}, nil
 }
 
 func (p *GeminiProvider) Name() string { return "gemini" }
@@ -38,42 +46,35 @@ func (p *GeminiProvider) Available(_ context.Context) bool {
 }
 
 func (p *GeminiProvider) Complete(ctx context.Context, req llm.Request) (<-chan llm.Token, error) {
-	client, err := genai.NewClient(ctx, option.WithAPIKey(p.cfg.APIKey))
-	if err != nil {
-		return nil, fmt.Errorf("gemini: create client: %w", err)
-	}
-
 	modelName := p.selectModel(req)
-	model := client.GenerativeModel(modelName)
 
+	cfg := &genai.GenerateContentConfig{}
 	if req.SystemPrompt != "" {
-		model.SystemInstruction = &genai.Content{
-			Parts: []genai.Part{genai.Text(req.SystemPrompt)},
+		cfg.SystemInstruction = &genai.Content{
+			Parts: []*genai.Part{{Text: req.SystemPrompt}},
 		}
 	}
 	if req.MaxTokens > 0 {
 		n := int32(req.MaxTokens)
-		model.MaxOutputTokens = &n
+		cfg.MaxOutputTokens = n
 	}
 	if req.Temperature > 0 {
 		t := float32(req.Temperature)
-		model.Temperature = &t
+		cfg.Temperature = &t
 	}
 	if req.ResponseFormat == "json" {
-		model.ResponseMIMEType = "application/json"
+		cfg.ResponseMIMEType = "application/json"
 	}
 
-	parts := toGeminiParts(req.Messages)
-	iter := model.GenerateContentStream(ctx, parts...)
+	contents := toGeminiContents(req.Messages)
+	iter := p.client.Models.GenerateContentStream(ctx, modelName, contents, cfg)
 
 	ch := make(chan llm.Token, 32)
 	go func() {
 		defer close(ch)
-		defer client.Close()
-		for {
-			resp, err := iter.Next()
+		for resp, err := range iter {
 			if err != nil {
-				if err.Error() == "iterator done" {
+				if err == io.EOF {
 					ch <- llm.Token{IsLast: true}
 					return
 				}
@@ -87,9 +88,9 @@ func (p *GeminiProvider) Complete(ctx context.Context, req llm.Request) (<-chan 
 					continue
 				}
 				for _, part := range cand.Content.Parts {
-					if t, ok := part.(genai.Text); ok && string(t) != "" {
+					if part.Text != "" {
 						select {
-						case ch <- llm.Token{Text: string(t)}:
+						case ch <- llm.Token{Text: part.Text}:
 						case <-ctx.Done():
 							return
 						}
@@ -97,31 +98,31 @@ func (p *GeminiProvider) Complete(ctx context.Context, req llm.Request) (<-chan 
 				}
 			}
 		}
+		ch <- llm.Token{IsLast: true}
 	}()
 
 	return ch, nil
 }
 
 func (p *GeminiProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	client, err := genai.NewClient(ctx, option.WithAPIKey(p.cfg.APIKey))
-	if err != nil {
-		return nil, fmt.Errorf("gemini embed: create client: %w", err)
-	}
-	defer client.Close()
-
 	modelName := p.cfg.ModelEmbed
 	if modelName == "" {
 		modelName = "text-embedding-004"
 	}
 
-	model := client.EmbeddingModel(modelName)
-	res, err := model.EmbedContent(ctx, genai.Text(text))
+	res, err := p.client.Models.EmbedContent(ctx, modelName,
+		[]*genai.Content{{Parts: []*genai.Part{{Text: text}}}},
+		nil,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("gemini embed: %w", err)
 	}
+	if len(res.Embeddings) == 0 {
+		return nil, fmt.Errorf("gemini embed: empty response")
+	}
 
-	out := make([]float32, len(res.Embedding.Values))
-	copy(out, res.Embedding.Values)
+	out := make([]float32, len(res.Embeddings[0].Values))
+	copy(out, res.Embeddings[0].Values)
 	return out, nil
 }
 
@@ -139,7 +140,6 @@ func (p *GeminiProvider) selectModel(req llm.Request) string {
 		if p.cfg.ModelLearn != "" {
 			return p.cfg.ModelLearn
 		}
-		// fallthrough to heal
 	}
 	if p.cfg.ModelHeal != "" {
 		return p.cfg.ModelHeal
@@ -147,30 +147,28 @@ func (p *GeminiProvider) selectModel(req llm.Request) string {
 	return "gemini-2.5-pro"
 }
 
-// Model reports the model this provider uses for a workload tier. It is the
-// same resolution Complete performs, exposed so callers that need to label or
-// price a run do not have to duplicate the defaults.
-func (p *GeminiProvider) Model(w llm.Workload) string {
+// ModelName reports the model this provider uses for a workload tier.
+func (p *GeminiProvider) ModelName(w llm.Workload) string {
 	return p.selectModel(llm.Request{Workload: w})
 }
 
-// toGeminiParts converts llm.Messages to genai.Part slice for the last user turn.
-// Gemini's GenerateContentStream takes a flat list of parts for the current turn.
-func toGeminiParts(msgs []llm.Message) []genai.Part {
-	parts := make([]genai.Part, 0, len(msgs))
-	for _, m := range msgs {
-		parts = append(parts, genai.Text(m.Content))
-	}
-	return parts
+// Model is an alias for ModelName for callers using the older interface.
+func (p *GeminiProvider) Model(w llm.Workload) string {
+	return p.ModelName(w)
 }
 
-func (p *GeminiProvider) ModelName(w llm.Workload) string {
-	switch w {
-	case llm.WorkloadHeal:
-		return p.cfg.ModelHeal
-	case llm.WorkloadLearn:
-		return p.cfg.ModelLearn
-	default:
-		return p.cfg.ModelDiagnose
+// toGeminiContents converts llm.Messages to genai.Content slice.
+func toGeminiContents(msgs []llm.Message) []*genai.Content {
+	contents := make([]*genai.Content, 0, len(msgs))
+	for _, m := range msgs {
+		role := m.Role
+		if role == "assistant" {
+			role = "model"
+		}
+		contents = append(contents, &genai.Content{
+			Role:  role,
+			Parts: []*genai.Part{{Text: m.Content}},
+		})
 	}
+	return contents
 }

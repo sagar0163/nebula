@@ -214,13 +214,15 @@ func buildRouter(only string, wrap func(llm.Provider) llm.Provider) *llm.Router 
 	}
 
 	for _, k := range loadKeys("gemini_api_key", viper.GetString("llm.gemini.api_key"), "NEBULA_GEMINI_KEY") {
-		register(providers.NewGemini(providers.GeminiConfig{
+		if p, err := providers.NewGemini(context.Background(), providers.GeminiConfig{
 			APIKey:        k,
 			ModelDiagnose: viper.GetString("llm.gemini.model_diagnose"),
 			ModelHeal:     viper.GetString("llm.gemini.model_heal"),
 			ModelLearn:    viper.GetString("llm.gemini.model_learn"),
 			ModelEmbed:    viper.GetString("llm.gemini.model_embed"),
-		}), llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn, llm.WorkloadEmbed)
+		}); err == nil && p != nil {
+			register(p, llm.WorkloadDiagnose, llm.WorkloadHeal, llm.WorkloadLearn, llm.WorkloadEmbed)
+		}
 	}
 
 	if base := viper.GetString("llm.ollama.base_url"); base != "" {

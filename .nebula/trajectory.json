@@ -1,0 +1,73 @@
+{
+  "instance_id": "issue-1791309048",
+  "steps": [
+    {
+      "phase": "planning",
+      "tool_calls": [],
+      "results": null,
+      "context": "Plan created with 0 steps: ",
+      "timestamp": "2026-10-06T23:20:51.088119804+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "planning",
+      "tool_calls": [],
+      "results": null,
+      "context": "Plan created with 0 steps: ",
+      "timestamp": "2026-10-06T23:21:10.680407091+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "execution",
+      "tool_calls": null,
+      "results": null,
+      "context": "diff --git a/internal/harness/shared/shared.go b/internal/harness/shared/shared.go\nindex d5d67a1..636d6b1 100644\n--- a/internal/harness/shared/shared.go\n+++ b/internal/harness/shared/shared.go\n@@ -146,10 +146,12 @@ type ModelConfig struct {\n // ModelRouting maps phases to model configs\n type ModelRouting map[Phase]ModelConfig\n \n-// DefaultModelRouting provides sensible defaults\n+// DefaultModelRouting provides sensible defaults using NVIDIA (primary) with Groq fallback.\n+// These map to providers registered in buildRouter() via the NEBULA_NVIDIA_KEY / NEBULA_GROQ_KEY env vars\n+// or OS keyring entries — never hardcoded here.\n var DefaultModelRouting = ModelRouting{\n-\tPhasePlanning:    {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 4000},\n-\tPhaseExecution:   {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 8000},\n-\tPhaseVerification: {Provider: \"openai\", Model: \"gpt-4o-mini\", Temperature: 0.0, MaxTokens: 2000},\n-\tPhaseCritique:    {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 4000},\n+\tPhasePlanning:     {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 4000},\n+\tPhaseExecution:    {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 8000},\n+\tPhaseVerification: {Provider: \"groq\",   Model: \"llama-3.1-70b-versatile\",           Temperature: 0.0, MaxTokens: 2000},\n+\tPhaseCritique:     {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 4000},\n }\n\\ No newline at end of file\n",
+      "timestamp": "2026-10-06T23:21:23.572411554+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "verification",
+      "tool_calls": null,
+      "results": null,
+      "context": "{\"passed\": false, \"error_trace\": \"Tests failed: 1 failed out of 1. Output: /home/sagar-jadhav/.pyenv/versions/3.14.3/bin/python: No module named pytest\\n\"}",
+      "timestamp": "2026-10-06T23:21:24.054198372+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "execution",
+      "tool_calls": null,
+      "results": null,
+      "context": "diff --git a/internal/harness/shared/shared.go b/internal/harness/shared/shared.go\nindex d5d67a1..636d6b1 100644\n--- a/internal/harness/shared/shared.go\n+++ b/internal/harness/shared/shared.go\n@@ -146,10 +146,12 @@ type ModelConfig struct {\n // ModelRouting maps phases to model configs\n type ModelRouting map[Phase]ModelConfig\n \n-// DefaultModelRouting provides sensible defaults\n+// DefaultModelRouting provides sensible defaults using NVIDIA (primary) with Groq fallback.\n+// These map to providers registered in buildRouter() via the NEBULA_NVIDIA_KEY / NEBULA_GROQ_KEY env vars\n+// or OS keyring entries — never hardcoded here.\n var DefaultModelRouting = ModelRouting{\n-\tPhasePlanning:    {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 4000},\n-\tPhaseExecution:   {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 8000},\n-\tPhaseVerification: {Provider: \"openai\", Model: \"gpt-4o-mini\", Temperature: 0.0, MaxTokens: 2000},\n-\tPhaseCritique:    {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 4000},\n+\tPhasePlanning:     {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 4000},\n+\tPhaseExecution:    {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 8000},\n+\tPhaseVerification: {Provider: \"groq\",   Model: \"llama-3.1-70b-versatile\",           Temperature: 0.0, MaxTokens: 2000},\n+\tPhaseCritique:     {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 4000},\n }\n\\ No newline at end of file\n",
+      "timestamp": "2026-10-06T23:21:35.43775084+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "verification",
+      "tool_calls": null,
+      "results": null,
+      "context": "{\"passed\": false, \"error_trace\": \"Tests failed: 1 failed out of 1. Output: /home/sagar-jadhav/.pyenv/versions/3.14.3/bin/python: No module named pytest\\n\"}",
+      "timestamp": "2026-10-06T23:21:35.867297059+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "execution",
+      "tool_calls": null,
+      "results": null,
+      "context": "diff --git a/internal/harness/shared/shared.go b/internal/harness/shared/shared.go\nindex d5d67a1..636d6b1 100644\n--- a/internal/harness/shared/shared.go\n+++ b/internal/harness/shared/shared.go\n@@ -146,10 +146,12 @@ type ModelConfig struct {\n // ModelRouting maps phases to model configs\n type ModelRouting map[Phase]ModelConfig\n \n-// DefaultModelRouting provides sensible defaults\n+// DefaultModelRouting provides sensible defaults using NVIDIA (primary) with Groq fallback.\n+// These map to providers registered in buildRouter() via the NEBULA_NVIDIA_KEY / NEBULA_GROQ_KEY env vars\n+// or OS keyring entries — never hardcoded here.\n var DefaultModelRouting = ModelRouting{\n-\tPhasePlanning:    {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 4000},\n-\tPhaseExecution:   {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 8000},\n-\tPhaseVerification: {Provider: \"openai\", Model: \"gpt-4o-mini\", Temperature: 0.0, MaxTokens: 2000},\n-\tPhaseCritique:    {Provider: \"anthropic\", Model: \"claude-3-5-sonnet\", Temperature: 0.1, MaxTokens: 4000},\n+\tPhasePlanning:     {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 4000},\n+\tPhaseExecution:    {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 8000},\n+\tPhaseVerification: {Provider: \"groq\",   Model: \"llama-3.1-70b-versatile\",           Temperature: 0.0, MaxTokens: 2000},\n+\tPhaseCritique:     {Provider: \"nvidia\", Model: \"nvidia/nemotron-3-super-120b-a12b\", Temperature: 0.1, MaxTokens: 4000},\n }\n\\ No newline at end of file\n",
+      "timestamp": "2026-10-06T23:21:46.914235412+05:30",
+      "tokens_used": 0
+    },
+    {
+      "phase": "verification",
+      "tool_calls": null,
+      "results": null,
+      "context": "{\"passed\": false, \"error_trace\": \"Tests failed: 1 failed out of 1. Output: /home/sagar-jadhav/.pyenv/versions/3.14.3/bin/python: No module named pytest\\n\"}",
+      "timestamp": "2026-10-06T23:21:47.320950381+05:30",
+      "tokens_used": 0
+    }
+  ],
+  "start_time": "2026-10-06T23:20:48.686351758+05:30",
+  "end_time": "2026-10-06T23:21:47.32126458+05:30",
+  "total_tokens": 0,
+  "status": "failed"
+}

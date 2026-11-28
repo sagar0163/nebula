@@ -24,3 +24,19 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Generated / runtime state
+.nebula/
+graphify-out/
+output/
+scratchpad/
+data/swebench/
+
+# Loose scripts (belong in scratchpad, not repo root)
+patch_logger.py
+patch_repo_summary.py
+robust_patch.py
+
+# Python cache
+__pycache__/
+*.pyc
